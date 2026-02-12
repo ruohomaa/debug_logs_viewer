@@ -1,0 +1,341 @@
+import { useState, useMemo, useCallback } from 'react';
+import type { SfConnection, ApexLogRecord, LoadedLog, LogEvent } from './types';
+import { fetchApexLogs, fetchLogBody } from './api';
+import { parseSalesforceLog, combineLogEvents, filterEvents, getCategories } from './logParser';
+import { LOG_COLORS } from './constants';
+import ConnectPanel from './components/ConnectPanel';
+import LogListPanel from './components/LogListPanel';
+import Toolbar from './components/Toolbar';
+import StatsBar from './components/StatsBar';
+import TimelineBar from './components/TimelineBar';
+import EventList from './components/EventList';
+import DetailPanel from './components/DetailPanel';
+
+export default function App() {
+  // ── Connection state ──
+  const [connection, setConnection] = useState<SfConnection | null>(null);
+
+  // ── Salesforce ApexLog records ──
+  const [apexLogs, setApexLogs] = useState<ApexLogRecord[]>([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+
+  // ── Selection ──
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // ── Loaded (fetched + parsed) logs ──
+  const [loadedLogs, setLoadedLogs] = useState<LoadedLog[]>([]);
+  const [loadingBody, setLoadingBody] = useState<Set<string>>(new Set());
+
+  // ── Combined events ──
+  const [combinedEvents, setCombinedEvents] = useState<LogEvent[]>([]);
+  const [showResults, setShowResults] = useState(false);
+
+  // ── Filters ──
+  const [search, setSearch] = useState('');
+  const [level, setLevel] = useState('all');
+  const [category, setCategory] = useState('all');
+  const [density, setDensity] = useState<'default' | 'compact' | 'comfortable'>('default');
+  const [showGaps, setShowGaps] = useState(false);
+  const [groupByRequest, setGroupByRequest] = useState(false);
+
+  // ── Detail panel ──
+  const [selectedEvent, setSelectedEvent] = useState<LogEvent | null>(null);
+
+  // ── Color tracker ──
+  const [colorIndex, setColorIndex] = useState(0);
+
+  // After connecting, load logs
+  const handleConnected = useCallback(async (conn: SfConnection) => {
+    setConnection(conn);
+    setLoadingLogs(true);
+    try {
+      const logs = await fetchApexLogs(conn.connId, 200);
+      setApexLogs(logs);
+    } catch (e) {
+      console.error('Failed to fetch logs:', e);
+    } finally {
+      setLoadingLogs(false);
+    }
+  }, []);
+
+  const handleRefreshLogs = useCallback(async () => {
+    if (!connection) return;
+    setLoadingLogs(true);
+    try {
+      const logs = await fetchApexLogs(connection.connId, 200);
+      setApexLogs(logs);
+    } catch (e) {
+      console.error('Failed to refresh logs:', e);
+    } finally {
+      setLoadingLogs(false);
+    }
+  }, [connection]);
+
+  // Toggle log selection
+  const handleToggle = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // Select a whole group
+  const handleSelectGroup = useCallback((ids: string[]) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      const allSelected = ids.every((id) => next.has(id));
+      if (allSelected) {
+        ids.forEach((id) => next.delete(id));
+      } else {
+        ids.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  }, []);
+
+  // Fetch bodies and combine
+  const handleFetchAndCombine = useCallback(async () => {
+    if (!connection || selectedIds.size === 0) return;
+
+    const idsToFetch = [...selectedIds];
+    const alreadyLoaded = new Map(loadedLogs.map((l) => [l.id, l]));
+    let nextColorIdx = colorIndex;
+
+    // Show loading state
+    setLoadingBody(new Set(idsToFetch.filter((id) => !alreadyLoaded.has(id))));
+
+    // Fetch bodies that haven't been loaded yet
+    const newLogs: LoadedLog[] = [];
+    const errors: string[] = [];
+
+    await Promise.all(
+      idsToFetch.map(async (id) => {
+        if (alreadyLoaded.has(id)) {
+          // Already loaded, just mark as selected
+          const existing = alreadyLoaded.get(id)!;
+          existing.selected = true;
+          newLogs.push(existing);
+          return;
+        }
+
+        try {
+          const body = await fetchLogBody(connection.connId, id);
+          const apexLog = apexLogs.find((l) => l.Id === id);
+          const logDate = apexLog?.StartTime
+            ? new Date(apexLog.StartTime).toISOString().slice(0, 10)
+            : undefined;
+          const { events, meta } = parseSalesforceLog(body, logDate);
+          const color = LOG_COLORS[nextColorIdx % LOG_COLORS.length];
+          nextColorIdx++;
+
+          const loaded: LoadedLog = {
+            id,
+            name: apexLog?.Operation || `Log ${id.substring(0, 8)}`,
+            color,
+            apexLog,
+            rawContent: body,
+            events,
+            meta,
+            selected: true,
+          };
+          newLogs.push(loaded);
+        } catch (e) {
+          errors.push(id);
+          console.error(`Failed to fetch log ${id}:`, e);
+        }
+      })
+    );
+
+    setColorIndex(nextColorIdx);
+    setLoadingBody(new Set());
+
+    // Merge with existing loaded logs (keeping unselected ones)
+    const allLoaded = [...loadedLogs.filter((l) => !idsToFetch.includes(l.id)), ...newLogs];
+    // Mark non-selected as unselected
+    allLoaded.forEach((l) => {
+      l.selected = selectedIds.has(l.id);
+    });
+    setLoadedLogs(allLoaded);
+
+    // Combine selected
+    const toMerge = allLoaded
+      .filter((l) => l.selected)
+      .map((l) => ({
+        events: l.events,
+        id: l.id,
+        name: l.name,
+        color: l.color,
+      }));
+
+    const merged = combineLogEvents(toMerge);
+    setCombinedEvents(merged);
+    setShowResults(true);
+
+    if (errors.length > 0) {
+      alert(`Failed to fetch ${errors.length} log(s). They were skipped.`);
+    }
+  }, [connection, selectedIds, loadedLogs, apexLogs, colorIndex]);
+
+  // Filtered events
+  const filteredEvents = useMemo(
+    () => filterEvents(combinedEvents, search, level, category),
+    [combinedEvents, search, level, category]
+  );
+
+  const categories = useMemo(() => getCategories(combinedEvents), [combinedEvents]);
+
+  // ── Render ──
+
+  // Not connected yet
+  if (!connection) {
+    return (
+      <div className="h-screen flex flex-col">
+        <Header />
+        <div className="flex-1">
+          <ConnectPanel onConnected={handleConnected} />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-screen flex flex-col">
+      <Header
+        instanceUrl={connection.instanceUrl}
+        username={connection.username}
+        onRefresh={handleRefreshLogs}
+        loading={loadingLogs}
+        onDisconnect={() => {
+          setConnection(null);
+          setApexLogs([]);
+          setSelectedIds(new Set());
+          setLoadedLogs([]);
+          setCombinedEvents([]);
+          setShowResults(false);
+        }}
+      />
+
+      <div className="flex-1 grid grid-cols-[350px_1fr] overflow-hidden">
+        {/* Sidebar */}
+        <aside className="bg-[var(--surface)] border-r border-[var(--border)] overflow-hidden flex flex-col">
+          <LogListPanel
+            logs={apexLogs}
+            selectedIds={selectedIds}
+            onToggle={handleToggle}
+            onSelectGroup={handleSelectGroup}
+            onFetchAndCombine={handleFetchAndCombine}
+            loadingBody={loadingBody}
+            groupByRequest={groupByRequest}
+            onToggleGrouping={() => setGroupByRequest(!groupByRequest)}
+          />
+        </aside>
+
+        {/* Main */}
+        <main className="flex flex-col overflow-hidden">
+          {!showResults ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-[var(--text-dim)] gap-4">
+              <svg
+                width="64"
+                height="64"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1"
+                className="opacity-40"
+              >
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="16" y1="13" x2="8" y2="13" />
+                <line x1="16" y1="17" x2="8" y2="17" />
+              </svg>
+              <h3 className="text-lg font-medium text-[var(--text)]">
+                {loadingLogs ? 'Loading debug logs...' : 'Select Logs to Combine'}
+              </h3>
+              <p className="text-sm max-w-md text-center leading-relaxed">
+                {loadingLogs
+                  ? 'Fetching ApexLog records from your Salesforce org...'
+                  : 'Select debug logs from the sidebar (use "Group by Request" to find related logs), then click Combine to merge them into a unified timeline.'}
+              </p>
+            </div>
+          ) : (
+            <>
+              <Toolbar
+                search={search}
+                onSearchChange={setSearch}
+                level={level}
+                onLevelChange={setLevel}
+                category={category}
+                onCategoryChange={setCategory}
+                categories={categories}
+                density={density}
+                onDensityChange={setDensity}
+                showGaps={showGaps}
+                onShowGapsChange={setShowGaps}
+              />
+              <StatsBar events={filteredEvents} logs={loadedLogs} />
+              <TimelineBar events={filteredEvents} logs={loadedLogs} />
+              <EventList
+                events={filteredEvents}
+                showGaps={showGaps}
+                density={density}
+                onSelectEvent={setSelectedEvent}
+              />
+            </>
+          )}
+        </main>
+      </div>
+
+      <DetailPanel event={selectedEvent} onClose={() => setSelectedEvent(null)} />
+    </div>
+  );
+}
+
+// ── Header ──
+function Header({
+  instanceUrl,
+  username,
+  onRefresh,
+  loading,
+  onDisconnect,
+}: {
+  instanceUrl?: string;
+  username?: string;
+  onRefresh?: () => void;
+  loading?: boolean;
+  onDisconnect?: () => void;
+}) {
+  return (
+    <header className="bg-[var(--surface)] border-b border-[var(--border)] px-5 py-3 flex items-center gap-4">
+      <h1 className="text-lg font-semibold bg-gradient-to-r from-[var(--accent)] to-[var(--success)] bg-clip-text text-transparent">
+        SF Debug Log Viewer
+      </h1>
+      {instanceUrl && (
+        <>
+          <span className="text-xs text-[var(--text-dim)]">
+            Connected to{' '}
+            <span className="text-[var(--success)] font-medium">{instanceUrl}</span>
+            {username && (
+              <span className="text-[var(--text-dim)]"> as <span className="text-[var(--text)] font-medium">{username}</span></span>
+            )}
+          </span>
+          <span className="flex-1" />
+          <button
+            onClick={onRefresh}
+            disabled={loading}
+            className="px-3 py-1 text-xs bg-[var(--surface2)] text-[var(--text)] border border-[var(--border)] rounded-md hover:bg-[var(--border)] cursor-pointer transition-colors disabled:opacity-50"
+          >
+            {loading ? 'Refreshing...' : 'Refresh Logs'}
+          </button>
+          <button
+            onClick={onDisconnect}
+            className="px-3 py-1 text-xs text-[var(--danger)] border border-[var(--border)] rounded-md hover:bg-[rgba(255,107,107,0.1)] cursor-pointer transition-colors bg-transparent"
+          >
+            Disconnect
+          </button>
+        </>
+      )}
+    </header>
+  );
+}
