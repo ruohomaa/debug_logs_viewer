@@ -28,7 +28,7 @@ export default function Toolbar({
   onShowGapsChange,
 }: Props) {
   return (
-    <div className="flex items-center gap-3 px-5 py-2.5 bg-[var(--surface)] border-b border-[var(--border)] flex-wrap">
+    <div className="flex items-center gap-3 px-5 py-2.5 bg-[var(--surface)] flex-wrap flex-1">
       <input
         type="text"
         value={search}

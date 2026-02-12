@@ -9,6 +9,7 @@ import Toolbar from './components/Toolbar';
 import StatsBar from './components/StatsBar';
 import TimelineBar from './components/TimelineBar';
 import EventList from './components/EventList';
+import SequenceDiagram from './components/SequenceDiagram';
 import DetailPanel from './components/DetailPanel';
 
 export default function App() {
@@ -37,6 +38,9 @@ export default function App() {
   const [density, setDensity] = useState<'default' | 'compact' | 'comfortable'>('default');
   const [showGaps, setShowGaps] = useState(false);
   const [groupByRequest, setGroupByRequest] = useState(false);
+
+  // ── View mode ──
+  const [viewMode, setViewMode] = useState<'list' | 'diagram'>('list');
 
   // ── Detail panel ──
   const [selectedEvent, setSelectedEvent] = useState<LogEvent | null>(null);
@@ -261,27 +265,78 @@ export default function App() {
             </div>
           ) : (
             <>
-              <Toolbar
-                search={search}
-                onSearchChange={setSearch}
-                level={level}
-                onLevelChange={setLevel}
-                category={category}
-                onCategoryChange={setCategory}
-                categories={categories}
-                density={density}
-                onDensityChange={setDensity}
-                showGaps={showGaps}
-                onShowGapsChange={setShowGaps}
-              />
+              {/* View mode toggle */}
+              <div className="flex items-center bg-[var(--surface)] border-b border-[var(--border)]">
+                <Toolbar
+                  search={search}
+                  onSearchChange={setSearch}
+                  level={level}
+                  onLevelChange={setLevel}
+                  category={category}
+                  onCategoryChange={setCategory}
+                  categories={categories}
+                  density={density}
+                  onDensityChange={setDensity}
+                  showGaps={showGaps}
+                  onShowGapsChange={setShowGaps}
+                />
+                <div className="flex items-center gap-1 px-3 border-l border-[var(--border)]">
+                  <button
+                    onClick={() => setViewMode('list')}
+                    className={`px-2.5 py-1.5 text-xs rounded-md cursor-pointer transition-colors ${
+                      viewMode === 'list'
+                        ? 'bg-[var(--accent)] text-white'
+                        : 'bg-[var(--surface2)] text-[var(--text-dim)] hover:bg-[var(--border)]'
+                    }`}
+                    title="Event list view"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <line x1="8" y1="6" x2="21" y2="6" />
+                      <line x1="8" y1="12" x2="21" y2="12" />
+                      <line x1="8" y1="18" x2="21" y2="18" />
+                      <line x1="3" y1="6" x2="3.01" y2="6" />
+                      <line x1="3" y1="12" x2="3.01" y2="12" />
+                      <line x1="3" y1="18" x2="3.01" y2="18" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={() => setViewMode('diagram')}
+                    className={`px-2.5 py-1.5 text-xs rounded-md cursor-pointer transition-colors ${
+                      viewMode === 'diagram'
+                        ? 'bg-[var(--accent)] text-white'
+                        : 'bg-[var(--surface2)] text-[var(--text-dim)] hover:bg-[var(--border)]'
+                    }`}
+                    title="Sequence diagram view"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <rect x="3" y="3" width="6" height="4" rx="1" />
+                      <rect x="15" y="3" width="6" height="4" rx="1" />
+                      <line x1="6" y1="7" x2="6" y2="20" strokeDasharray="3 2" />
+                      <line x1="18" y1="7" x2="18" y2="20" strokeDasharray="3 2" />
+                      <line x1="6" y1="11" x2="18" y2="11" />
+                      <polygon points="16,9.5 18,11 16,12.5" fill="currentColor" />
+                      <line x1="18" y1="16" x2="6" y2="16" />
+                      <polygon points="8,14.5 6,16 8,17.5" fill="currentColor" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
               <StatsBar events={filteredEvents} logs={loadedLogs} />
               <TimelineBar events={filteredEvents} logs={loadedLogs} />
-              <EventList
-                events={filteredEvents}
-                showGaps={showGaps}
-                density={density}
-                onSelectEvent={setSelectedEvent}
-              />
+              {viewMode === 'list' ? (
+                <EventList
+                  events={filteredEvents}
+                  showGaps={showGaps}
+                  density={density}
+                  onSelectEvent={setSelectedEvent}
+                />
+              ) : (
+                <SequenceDiagram
+                  events={filteredEvents}
+                  logs={loadedLogs}
+                  onSelectEvent={setSelectedEvent}
+                />
+              )}
             </>
           )}
         </main>
