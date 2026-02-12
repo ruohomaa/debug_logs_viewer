@@ -45,6 +45,18 @@ export default function LogListPanel({
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [selectedUsers, setSelectedUsers] = useState<Set<string>>(new Set());
   const [showUserFilter, setShowUserFilter] = useState(false);
+  const [timeFilter, setTimeFilter] = useState('all');
+
+  const TIME_FILTER_OPTIONS = [
+    { value: 'all', label: 'All time' },
+    { value: '1', label: 'Last 1 min' },
+    { value: '5', label: 'Last 5 min' },
+    { value: '15', label: 'Last 15 min' },
+    { value: '30', label: 'Last 30 min' },
+    { value: '60', label: 'Last 1 hour' },
+    { value: '360', label: 'Last 6 hours' },
+    { value: '1440', label: 'Last 24 hours' },
+  ];
 
   // Unique users from all logs
   const allUsers = useMemo(() => {
@@ -78,6 +90,12 @@ export default function LogListPanel({
   const filteredLogs = useMemo(() => {
     let result = logs;
 
+    // Filter by time
+    if (timeFilter !== 'all') {
+      const cutoff = Date.now() - Number.parseInt(timeFilter) * 60 * 1000;
+      result = result.filter((l) => new Date(l.StartTime).getTime() >= cutoff);
+    }
+
     // Filter by selected users
     if (selectedUsers.size > 0) {
       result = result.filter((l) => {
@@ -99,7 +117,7 @@ export default function LogListPanel({
     }
 
     return result;
-  }, [logs, search, selectedUsers]);
+  }, [logs, search, selectedUsers, timeFilter]);
 
   const groups: LogGroup[] = useMemo(() => {
     if (!groupByRequest) return [];
@@ -267,6 +285,23 @@ export default function LogListPanel({
           placeholder="Filter logs..."
           className="w-full px-2.5 py-1.5 bg-[var(--bg)] border border-[var(--border)] rounded-md text-[var(--text)] text-xs outline-none focus:border-[var(--accent)] transition-colors"
         />
+
+        {/* Time filter */}
+        <select
+          value={timeFilter}
+          onChange={(e) => setTimeFilter(e.target.value)}
+          className={`w-full px-2.5 py-1.5 bg-[var(--bg)] border rounded-md text-xs outline-none cursor-pointer transition-colors ${
+            timeFilter === 'all'
+              ? 'border-[var(--border)] text-[var(--text-dim)]'
+              : 'border-[var(--accent)] text-[var(--accent)]'
+          }`}
+        >
+          {TIME_FILTER_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
 
         {/* User filter */}
         {allUsers.length > 1 && (

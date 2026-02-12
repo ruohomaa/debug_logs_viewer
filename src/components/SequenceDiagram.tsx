@@ -42,6 +42,25 @@ const SIGNIFICANT_EVENTS = new Set([
 
 const PARALLEL_TOLERANCE_MS = 1;
 
+/** Extract the host/endpoint from a CALLOUT_REQUEST or CALLOUT_RESPONSE detail string */
+function extractCalloutEndpoint(detail: string): string {
+  // Try to extract a URL from the detail
+  const urlMatch = /https?:\/\/([^/\s|]+)/.exec(detail);
+  if (urlMatch) return urlMatch[1];
+  // Try to extract an endpoint= or Named Credential
+  const namedMatch = /(?:Named(?:Credential)?|endpoint)[=:\s]+([^\s|,]+)/i.exec(detail);
+  if (namedMatch) return namedMatch[1];
+  // Fallback: first segment after splitting on | that looks like a host
+  const parts = detail.split('|');
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (/^https?:\/\//.test(trimmed)) {
+      try { return new URL(trimmed).host; } catch { /* ignore */ }
+    }
+  }
+  return 'External Service';
+}
+
 // ── Event categories for filtering ──
 interface EventCategory {
   readonly id: string;
@@ -81,13 +100,13 @@ function formatRelativeMs(ms: number): string {
 }
 
 // ── Message direction: who is talking to whom ──
-type ArrowDir = 'client-to-server' | 'server-to-client' | 'self-server';
+type ArrowDir = 'client-to-server' | 'server-to-client' | 'server-to-external' | 'external-to-server' | 'self-server';
 
 function getArrowDirection(eventType: string): ArrowDir {
   if (/EXECUTION_STARTED/.test(eventType)) return 'client-to-server';
   if (/EXECUTION_FINISHED/.test(eventType)) return 'server-to-client';
-  if (/CALLOUT_REQUEST/.test(eventType)) return 'server-to-client';
-  if (/CALLOUT_RESPONSE/.test(eventType)) return 'client-to-server';
+  if (/CALLOUT_REQUEST/.test(eventType)) return 'server-to-external';
+  if (/CALLOUT_RESPONSE/.test(eventType)) return 'external-to-server';
   return 'self-server';
 }
 
@@ -117,9 +136,20 @@ function shortLabel(e: LogEvent): string {
     case 'EXCEPTION_THROWN':
     case 'FATAL_ERROR':
       return d.substring(0, 60);
-    case 'CALLOUT_REQUEST':
-    case 'CALLOUT_RESPONSE':
-      return `Callout: ${d.substring(0, 50)}`;
+    case 'CALLOUT_REQUEST': {
+      const endpoint = extractCalloutEndpoint(d);
+      // Try to extract HTTP method
+      const methodMatch = /\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/i.exec(d);
+      const method = methodMatch ? methodMatch[1].toUpperCase() + ' ' : '';
+      return `${method}${endpoint}`.substring(0, 50);
+    }
+    case 'CALLOUT_RESPONSE': {
+      // Try to extract status code
+      const statusMatch = /\b(\d{3})\b/.exec(d);
+      const status = statusMatch ? `[${statusMatch[1]}] ` : '';
+      const ep = extractCalloutEndpoint(d);
+      return `${status}${ep}`.substring(0, 50);
+    }
     case 'EXECUTION_STARTED':
       return 'Request';
     case 'EXECUTION_FINISHED':
@@ -167,6 +197,7 @@ interface DiagramMessage {
   sourceLogId: string;
   sourceLogName: string;
   sourceColor: string;
+  calloutEndpoint?: string;
 }
 
 interface ParFragment {
@@ -185,12 +216,14 @@ interface ParSection {
 
 // ── Layout constants ──
 const HEADER_HEIGHT = 60;
-const CLIENT_X = 160;
-const SERVER_X = 560;
+const CLIENT_X = 140;
+const SERVER_X = 430;
+const ENDPOINT_START_X = 680;
+const ENDPOINT_SPACING = 200;
 const MSG_HEIGHT = 32;
 const MSG_GAP = 4;
-const LEFT_MARGIN = 80;
-const DIAGRAM_WIDTH = 800;
+const LEFT_MARGIN = 60;
+const BASE_DIAGRAM_WIDTH = 900;
 const PAR_PADDING = 12;
 const PAR_LABEL_HEIGHT = 22;
 const SECTION_DIVIDER_HEIGHT = 20;
@@ -218,20 +251,31 @@ function groupEventsByTimestamp(filtered: LogEvent[]): LogEvent[][] {
 function layoutMessages(
   logEvents: LogEvent[],
   startY: number,
+  calloutState: { lastEndpoint?: string },
 ): { messages: DiagramMessage[]; endY: number } {
   const messages: DiagramMessage[] = [];
   let y = startY;
   for (const e of logEvents) {
+    const direction = getArrowDirection(e.eventType);
+    let calloutEndpoint: string | undefined;
+    if (direction === 'server-to-external') {
+      calloutEndpoint = extractCalloutEndpoint(e.detail);
+      calloutState.lastEndpoint = calloutEndpoint;
+    } else if (direction === 'external-to-server') {
+      // Use the endpoint from the preceding CALLOUT_REQUEST
+      calloutEndpoint = calloutState.lastEndpoint || extractCalloutEndpoint(e.detail);
+    }
     messages.push({
       event: e,
       y,
       label: shortLabel(e),
       color: eventColor(e.eventType),
-      direction: getArrowDirection(e.eventType),
+      direction,
       isError: e.level === 'ERROR' || e.level === 'FATAL',
       sourceLogId: e.sourceLogId || '',
       sourceLogName: e.sourceLogName || '',
       sourceColor: e.sourceColor || '#6c8cff',
+      calloutEndpoint,
     });
     y += MSG_HEIGHT + MSG_GAP;
   }
@@ -245,6 +289,7 @@ function layoutParFragment(
   currentY: number,
   allMessages: DiagramMessage[],
   fragments: ParFragment[],
+  calloutState: { lastEndpoint?: string },
 ): number {
   const fragYStart = currentY;
   let y = currentY + PAR_LABEL_HEIGHT;
@@ -260,7 +305,7 @@ function layoutParFragment(
     }
 
     const sectionYStart = y - (sectionIdx > 0 ? SECTION_DIVIDER_HEIGHT : 0);
-    const { messages: sectionMsgs, endY } = layoutMessages(logEvents, y);
+    const { messages: sectionMsgs, endY } = layoutMessages(logEvents, y, calloutState);
     allMessages.push(...sectionMsgs);
     y = endY;
 
@@ -295,66 +340,81 @@ function computeActivationBars(
   return [...byLog.values()];
 }
 
+interface ArrowOpts {
+  fromX: number;
+  toX: number;
+  arrowY: number;
+  color: string;
+  opacity: number;
+  strokeW: number;
+  label: string;
+  dashed: boolean;
+}
+
+/** Render an arrow between two X positions */
+function renderArrowBetween(opts: ArrowOpts) {
+  const { fromX, toX, arrowY, color, opacity, strokeW, label, dashed } = opts;
+  const arrowSize = 7;
+  const goingRight = toX > fromX;
+  const tipX = toX;
+  const baseX = goingRight ? toX - arrowSize : toX + arrowSize;
+
+  return (
+    <g>
+      <line
+        x1={fromX} y1={arrowY}
+        x2={baseX} y2={arrowY}
+        stroke={color} strokeWidth={strokeW}
+        strokeDasharray={dashed ? '6 3' : undefined}
+        opacity={opacity}
+      />
+      <polygon
+        points={`${tipX},${arrowY} ${baseX},${arrowY - arrowSize / 2} ${baseX},${arrowY + arrowSize / 2}`}
+        fill={color} opacity={opacity}
+      />
+      <text
+        x={(fromX + toX) / 2} y={arrowY - 6}
+        textAnchor="middle" fill={color}
+        fontSize={9} fontWeight={500} fontFamily="system-ui" opacity={opacity}
+      >
+        {label}
+      </text>
+    </g>
+  );
+}
+
 /** Render an arrow based on direction */
-function renderArrow(msg: DiagramMessage, arrowY: number, isHovered: boolean) {
+function renderArrow(msg: DiagramMessage, arrowY: number, isHovered: boolean, endpointXMap: Map<string, number>) {
   const color = msg.isError ? '#ff6b6b' : msg.color;
   const opacity = isHovered ? 1 : 0.7;
   const strokeW = isHovered ? 1.8 : 1.2;
-  const arrowSize = 7;
-  const labelMaxLen = 65;
+  const labelMaxLen = endpointXMap.size > 0 ? 45 : 65;
   const truncLabel = msg.label.length > labelMaxLen
     ? msg.label.substring(0, labelMaxLen - 3) + '...'
     : msg.label;
 
   if (msg.direction === 'client-to-server') {
-    return (
-      <g>
-        <line
-          x1={CLIENT_X} y1={arrowY}
-          x2={SERVER_X - arrowSize} y2={arrowY}
-          stroke={color} strokeWidth={strokeW} opacity={opacity}
-        />
-        <polygon
-          points={`${SERVER_X},${arrowY} ${SERVER_X - arrowSize},${arrowY - arrowSize / 2} ${SERVER_X - arrowSize},${arrowY + arrowSize / 2}`}
-          fill={color} opacity={opacity}
-        />
-        <text
-          x={(CLIENT_X + SERVER_X) / 2} y={arrowY - 6}
-          textAnchor="middle" fill={color}
-          fontSize={9} fontWeight={500} fontFamily="system-ui" opacity={opacity}
-        >
-          {truncLabel}
-        </text>
-      </g>
-    );
+    return renderArrowBetween({ fromX: CLIENT_X, toX: SERVER_X, arrowY, color, opacity, strokeW, label: truncLabel, dashed: false });
   }
 
   if (msg.direction === 'server-to-client') {
-    return (
-      <g>
-        <line
-          x1={SERVER_X} y1={arrowY}
-          x2={CLIENT_X + arrowSize} y2={arrowY}
-          stroke={color} strokeWidth={strokeW} strokeDasharray="6 3" opacity={opacity}
-        />
-        <polygon
-          points={`${CLIENT_X},${arrowY} ${CLIENT_X + arrowSize},${arrowY - arrowSize / 2} ${CLIENT_X + arrowSize},${arrowY + arrowSize / 2}`}
-          fill={color} opacity={opacity}
-        />
-        <text
-          x={(CLIENT_X + SERVER_X) / 2} y={arrowY - 6}
-          textAnchor="middle" fill={color}
-          fontSize={9} fontWeight={500} fontFamily="system-ui" opacity={opacity}
-        >
-          {truncLabel}
-        </text>
-      </g>
-    );
+    return renderArrowBetween({ fromX: SERVER_X, toX: CLIENT_X, arrowY, color, opacity, strokeW, label: truncLabel, dashed: true });
+  }
+
+  if (msg.direction === 'server-to-external') {
+    const extX = (msg.calloutEndpoint && endpointXMap.get(msg.calloutEndpoint)) || ENDPOINT_START_X;
+    return renderArrowBetween({ fromX: SERVER_X, toX: extX, arrowY, color, opacity, strokeW, label: truncLabel, dashed: false });
+  }
+
+  if (msg.direction === 'external-to-server') {
+    const extX = (msg.calloutEndpoint && endpointXMap.get(msg.calloutEndpoint)) || ENDPOINT_START_X;
+    return renderArrowBetween({ fromX: extX, toX: SERVER_X, arrowY, color, opacity, strokeW, label: truncLabel, dashed: true });
   }
 
   // self-server: loop on the server lifeline
-  const loopWidth = 80;
+  const loopWidth = 60;
   const loopHeight = 14;
+  const arrowSize = 7;
   return (
     <g>
       <polyline
@@ -408,6 +468,34 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
     return best;
   }, [selectedLogs]);
 
+  // Collect unique callout endpoints from CALLOUT_REQUEST events only
+  // (responses inherit the endpoint from their preceding request)
+  const calloutEndpoints = useMemo(() => {
+    const endpoints = new Set<string>();
+    for (const e of events) {
+      if (e.eventType === 'CALLOUT_REQUEST') {
+        endpoints.add(extractCalloutEndpoint(e.detail));
+      }
+    }
+    return [...endpoints];
+  }, [events]);
+
+  // Map each endpoint to its X position
+  const endpointXMap = useMemo(() => {
+    const map = new Map<string, number>();
+    calloutEndpoints.forEach((ep, i) => {
+      map.set(ep, ENDPOINT_START_X + i * ENDPOINT_SPACING);
+    });
+    return map;
+  }, [calloutEndpoints]);
+
+  // Dynamic diagram width based on number of endpoints
+  const diagramWidth = useMemo(() => {
+    if (calloutEndpoints.length === 0) return BASE_DIAGRAM_WIDTH;
+    const lastX = ENDPOINT_START_X + (calloutEndpoints.length - 1) * ENDPOINT_SPACING;
+    return Math.max(BASE_DIAGRAM_WIDTH, lastX + 120);
+  }, [calloutEndpoints]);
+
   // Build diagram layout
   const { messages, parFragments, totalHeight } = useMemo(() => {
     const filtered = (filter === 'significant'
@@ -423,6 +511,7 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
     const fragments: ParFragment[] = [];
     let currentY = HEADER_HEIGHT + 20;
     const groups = groupEventsByTimestamp(filtered);
+    const calloutState: { lastEndpoint?: string } = {};
 
     for (const group of groups) {
       const byLog = new Map<string, LogEvent[]>();
@@ -433,9 +522,9 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
       }
 
       if (byLog.size > 1) {
-        currentY = layoutParFragment(byLog, selectedLogs, currentY, allMessages, fragments);
+        currentY = layoutParFragment(byLog, selectedLogs, currentY, allMessages, fragments, calloutState);
       } else {
-        const { messages: seqMsgs, endY } = layoutMessages(group, currentY);
+        const { messages: seqMsgs, endY } = layoutMessages(group, currentY, calloutState);
         allMessages.push(...seqMsgs);
         currentY = endY;
       }
@@ -549,12 +638,12 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
       {/* Diagram */}
       <div ref={containerRef} className="flex-1 overflow-auto">
         <svg
-          width={DIAGRAM_WIDTH * zoom}
+          width={diagramWidth * zoom}
           height={totalHeight * zoom}
-          viewBox={`0 0 ${DIAGRAM_WIDTH} ${totalHeight}`}
+          viewBox={`0 0 ${diagramWidth} ${totalHeight}`}
           style={{ minWidth: '100%' }}
         >
-          <rect width={DIAGRAM_WIDTH} height={totalHeight} fill="var(--bg)" />
+          <rect width={diagramWidth} height={totalHeight} fill="var(--bg)" />
 
           {/* ── Participant: Client ── */}
           <rect x={CLIENT_X - 60} y={8} width={120} height={40} rx={6}
@@ -582,6 +671,32 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
             stroke="#4ecdc4" strokeWidth={1} strokeDasharray="6 4" opacity={0.3}
           />
 
+          {/* ── Participant: External Service endpoints ── */}
+          {calloutEndpoints.map((ep) => {
+            const epX = endpointXMap.get(ep) || ENDPOINT_START_X;
+            const displayLabel = ep.length > 20 ? ep.substring(0, 17) + '...' : ep;
+            return (
+              <g key={`participant-${ep}`}>
+                <rect x={epX - 70} y={8} width={140} height={40} rx={6}
+                  fill="#fb923c" fillOpacity={0.15} stroke="#fb923c" strokeWidth={1.5}
+                />
+                <text x={epX} y={26} textAnchor="middle" fill="#fb923c"
+                  fontSize={10} fontWeight={600} fontFamily="system-ui"
+                >
+                  {displayLabel}
+                </text>
+                <text x={epX} y={40} textAnchor="middle" fill="#fb923c"
+                  fontSize={8} fontFamily="system-ui" opacity={0.6}
+                >
+                  External
+                </text>
+                <line x1={epX} y1={HEADER_HEIGHT} x2={epX} y2={totalHeight}
+                  stroke="#fb923c" strokeWidth={1} strokeDasharray="6 4" opacity={0.3}
+                />
+              </g>
+            );
+          })}
+
           {/* ── Activation bars on server lifeline ── */}
           {activationBars.map((bar) => (
             <rect
@@ -602,7 +717,7 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
               {/* Fragment frame */}
               <rect
                 x={LEFT_MARGIN} y={frag.yStart}
-                width={DIAGRAM_WIDTH - LEFT_MARGIN - 40}
+                width={diagramWidth - LEFT_MARGIN - 40}
                 height={frag.yEnd - frag.yStart}
                 fill="transparent" stroke="#ffd93d" strokeWidth={1.5} opacity={0.6}
               />
@@ -624,7 +739,7 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
                   {si > 0 && (
                     <line
                       x1={LEFT_MARGIN} y1={section.yStart}
-                      x2={DIAGRAM_WIDTH - 40} y2={section.yStart}
+                      x2={diagramWidth - 40} y2={section.yStart}
                       stroke="#ffd93d" strokeWidth={1} strokeDasharray="8 4" opacity={0.5}
                     />
                   )}
@@ -654,7 +769,7 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
                 onClick={() => onSelectEvent(msg.event)}
                 style={{ cursor: 'pointer' }}
               >
-                {renderArrow(msg, arrowY, isHovered)}
+                {renderArrow(msg, arrowY, isHovered, endpointXMap)}
 
                 {/* Relative elapsed time */}
                 <text
