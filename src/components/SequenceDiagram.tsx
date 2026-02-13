@@ -89,14 +89,15 @@ function getCategoryId(eventType: string): string {
   return 'other';
 }
 
-/** Format elapsed milliseconds as a compact relative string */
+/** Format elapsed milliseconds as a readable relative string */
 function formatRelativeMs(ms: number): string {
-  if (ms < 0) return '+0ms';
-  if (ms < 1000) return `+${Math.round(ms)}ms`;
-  if (ms < 60000) return `+${(ms / 1000).toFixed(1)}s`;
+  if (ms < 0) return '+0 ms';
+  if (ms < 1000) return `+${Math.round(ms)} ms`;
+  if (ms < 10000) return `+${(ms / 1000).toFixed(2)} s`;
+  if (ms < 60000) return `+${(ms / 1000).toFixed(1)} s`;
   const min = Math.floor(ms / 60000);
   const sec = Math.round((ms % 60000) / 1000);
-  return `+${min}m${sec}s`;
+  return `+${min}m ${sec}s`;
 }
 
 // ── Message direction: who is talking to whom ──
@@ -772,14 +773,28 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
                 {renderArrow(msg, arrowY, isHovered, endpointXMap)}
 
                 {/* Relative elapsed time */}
-                <text
-                  x={LEFT_MARGIN - 4} y={arrowY + 3}
-                  textAnchor="end" fill="var(--text-dim)"
-                  fontSize={8} fontFamily="monospace"
-                  opacity={isHovered ? 1 : 0.4}
-                >
-                  {formatRelativeMs(msg.event.absoluteTimestamp - baseTimestamp)}
-                </text>
+                {(() => {
+                  const timeText = formatRelativeMs(msg.event.absoluteTimestamp - baseTimestamp);
+                  const textWidth = timeText.length * 5.6 + 8;
+                  return (
+                    <>
+                      <rect
+                        x={LEFT_MARGIN - 4 - textWidth} y={arrowY - 8}
+                        width={textWidth} height={16} rx={4}
+                        fill={isHovered ? 'var(--surface-hover, rgba(255,255,255,0.12))' : 'transparent'}
+                      />
+                      <text
+                        x={LEFT_MARGIN - 8} y={arrowY + 4}
+                        textAnchor="end" fill="var(--text-dim)"
+                        fontSize={10} fontFamily="'SF Mono', 'Cascadia Code', 'Fira Code', monospace"
+                        fontWeight={isHovered ? 600 : 400}
+                        opacity={isHovered ? 1 : 0.65}
+                      >
+                        {timeText}
+                      </text>
+                    </>
+                  );
+                })()}
 
                 {/* Source log color indicator */}
                 <circle
