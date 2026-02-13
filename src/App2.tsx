@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, type DragEvent } from 'react';
 import type { SfConnection, ApexLogRecord, LoadedLog, LogEvent } from './types';
 import { fetchApexLogs, fetchLogBody } from './api';
 import { parseSalesforceLog, combineLogEvents, filterEvents, getCategories } from './logParser';
@@ -47,6 +47,9 @@ export default function App() {
 
   // ── Color tracker ──
   const [colorIndex, setColorIndex] = useState(0);
+
+  // ── Drag-and-drop state ──
+  const [isDragOver, setIsDragOver] = useState(false);
 
   // After connecting, load logs
   const handleConnected = useCallback(async (conn: SfConnection) => {
@@ -182,6 +185,84 @@ export default function App() {
     }
   }, [connection, selectedIds, loadedLogs, apexLogs, colorIndex]);
 
+  // ── Handle dropping a log from the sidebar ──
+  const handleDropLog = useCallback(async (logId: string) => {
+    if (!connection) return;
+
+    // Already loaded?
+    const existing = loadedLogs.find((l) => l.id === logId);
+    if (existing) {
+      existing.selected = true;
+      const allLoaded = loadedLogs.map((l) => ({ ...l, selected: true }));
+      setLoadedLogs(allLoaded);
+      const toMerge = allLoaded.map((l) => ({ events: l.events, id: l.id, name: l.name, color: l.color }));
+      setCombinedEvents(combineLogEvents(toMerge));
+      setShowResults(true);
+      return;
+    }
+
+    // Fetch the log body
+    setLoadingBody((prev) => new Set([...prev, logId]));
+    try {
+      const body = await fetchLogBody(connection.connId, logId);
+      const apexLog = apexLogs.find((l) => l.Id === logId);
+      const logDate = apexLog?.StartTime
+        ? new Date(apexLog.StartTime).toISOString().slice(0, 10)
+        : undefined;
+      const { events, meta } = parseSalesforceLog(body, logDate);
+      const color = LOG_COLORS[colorIndex % LOG_COLORS.length];
+
+      const loaded: LoadedLog = {
+        id: logId,
+        name: apexLog?.Operation || `Log ${logId.substring(0, 8)}`,
+        color,
+        apexLog,
+        rawContent: body,
+        events,
+        meta,
+        selected: true,
+      };
+
+      setColorIndex((c) => c + 1);
+
+      const allLoaded = [...loadedLogs, loaded].map((l) => ({ ...l, selected: true }));
+      setLoadedLogs(allLoaded);
+      const toMerge = allLoaded.map((l) => ({ events: l.events, id: l.id, name: l.name, color: l.color }));
+      setCombinedEvents(combineLogEvents(toMerge));
+      setShowResults(true);
+    } catch (e) {
+      console.error(`Failed to fetch log ${logId}:`, e);
+    } finally {
+      setLoadingBody((prev) => {
+        const next = new Set(prev);
+        next.delete(logId);
+        return next;
+      });
+    }
+  }, [connection, loadedLogs, apexLogs, colorIndex]);
+
+  // ── Drag-over / drop handlers for the main content area ──
+  const handleMainDragOver = useCallback((e: DragEvent) => {
+    if (e.dataTransfer.types.includes('application/x-log-id')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      setIsDragOver(true);
+    }
+  }, []);
+
+  const handleMainDragLeave = useCallback(() => {
+    setIsDragOver(false);
+  }, []);
+
+  const handleMainDrop = useCallback((e: DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    const logId = e.dataTransfer.getData('application/x-log-id');
+    if (logId) {
+      handleDropLog(logId);
+    }
+  }, [handleDropLog]);
+
   // Filtered events
   const filteredEvents = useMemo(
     () => filterEvents(combinedEvents, search, level, category),
@@ -237,7 +318,32 @@ export default function App() {
         </aside>
 
         {/* Main */}
-        <main className="flex flex-col overflow-hidden">
+        <main
+          className={`flex flex-col overflow-hidden relative ${
+            isDragOver ? 'ring-2 ring-inset ring-[var(--accent)] bg-[rgba(108,140,255,0.05)]' : ''
+          }`}
+          onDragOver={handleMainDragOver}
+          onDragLeave={handleMainDragLeave}
+          onDrop={handleMainDrop}
+        >
+          {/* Drop zone overlay */}
+          {isDragOver && (
+            <div
+              className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none"
+              style={{ background: 'rgba(15, 17, 23, 0.85)' }}
+            >
+              <div className="flex flex-col items-center gap-3 text-[var(--accent)]">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="16" y1="13" x2="8" y2="13" />
+                  <line x1="16" y1="17" x2="8" y2="17" />
+                </svg>
+                <span className="text-lg font-semibold">Drop to add log</span>
+              </div>
+            </div>
+          )}
+
           {!showResults ? (
             <div className="flex-1 flex flex-col items-center justify-center text-[var(--text-dim)] gap-4">
               <svg
@@ -255,12 +361,12 @@ export default function App() {
                 <line x1="16" y1="17" x2="8" y2="17" />
               </svg>
               <h3 className="text-lg font-medium text-[var(--text)]">
-                {loadingLogs ? 'Loading debug logs...' : 'Select Logs to Combine'}
+                {loadingLogs ? 'Loading debug logs...' : 'Drop Logs Here'}
               </h3>
               <p className="text-sm max-w-md text-center leading-relaxed">
                 {loadingLogs
                   ? 'Fetching ApexLog records from your Salesforce org...'
-                  : 'Select debug logs from the sidebar (use "Group by Request" to find related logs), then click Combine to merge them into a unified timeline.'}
+                  : 'Drag debug logs from the sidebar and drop them here to view the raw log and sequence diagram.'}
               </p>
             </div>
           ) : (

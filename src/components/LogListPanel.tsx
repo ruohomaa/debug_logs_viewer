@@ -143,17 +143,7 @@ export default function LogListPanel({
       .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
   }, [filteredLogs, groupByRequest]);
 
-  const selectedCount = selectedIds.size;
 
-  const handleSelectAll = () => {
-    const allIds = filteredLogs.map((l) => l.Id);
-    const allSelected = allIds.every((id) => selectedIds.has(id));
-    if (allSelected) {
-      allIds.forEach((id) => onToggle(id));
-    } else {
-      allIds.filter((id) => !selectedIds.has(id)).forEach((id) => onToggle(id));
-    }
-  };
 
   const formatTime = (iso: string) => {
     try {
@@ -185,25 +175,20 @@ export default function LogListPanel({
   };
 
   const renderLogRow = (log: ApexLogRecord) => {
-    const isSelected = selectedIds.has(log.Id);
     const isLoading = loadingBody.has(log.Id);
     const isExpanded = expandedIds.has(log.Id);
 
     return (
       <div key={log.Id} className="group">
         <div
-          className={`flex items-start gap-2.5 px-3 py-2.5 rounded-md cursor-pointer transition-colors hover:bg-[var(--surface2)] ${
-            isSelected ? 'bg-[rgba(108,140,255,0.08)]' : ''
-          }`}
-          onClick={() => onToggle(log.Id)}
+          className="flex items-start gap-2.5 px-3 py-2.5 rounded-md cursor-grab transition-colors hover:bg-[var(--surface2)] active:cursor-grabbing"
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData('application/x-log-id', log.Id);
+            e.dataTransfer.effectAllowed = 'copy';
+          }}
+          onClick={(e) => toggleExpand(log.Id, e)}
         >
-          <input
-            type="checkbox"
-            checked={isSelected}
-            onChange={() => onToggle(log.Id)}
-            className="mt-1 accent-[var(--accent)] cursor-pointer"
-            onClick={(e) => e.stopPropagation()}
-          />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
               <div className="text-sm font-medium truncate text-[var(--text)] flex-1">
@@ -377,7 +362,7 @@ export default function LogListPanel({
           </label>
           <span className="flex-1" />
           <span className="text-[11px] text-[var(--text-dim)]">
-            {filteredLogs.length} logs · {selectedCount} selected
+            {filteredLogs.length} logs
           </span>
         </div>
       </div>
@@ -418,22 +403,7 @@ export default function LogListPanel({
         )}
       </div>
 
-      {/* Actions */}
-      <div className="p-3 border-t border-[var(--border)] flex gap-2">
-        <button
-          onClick={handleSelectAll}
-          className="flex-1 py-1.5 text-xs bg-[var(--surface2)] text-[var(--text)] border border-[var(--border)] rounded-md hover:bg-[var(--border)] cursor-pointer transition-colors"
-        >
-          Select All / None
-        </button>
-        <button
-          onClick={onFetchAndCombine}
-          disabled={selectedCount === 0}
-          className="flex-1 py-1.5 text-xs bg-[var(--accent)] text-white rounded-md hover:bg-[var(--accent-hover)] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors font-medium"
-        >
-          Combine {selectedCount > 0 ? `(${selectedCount})` : ''}
-        </button>
-      </div>
+
     </div>
   );
 }
