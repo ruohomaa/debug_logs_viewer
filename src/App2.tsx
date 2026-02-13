@@ -459,8 +459,27 @@ export default function App() {
                   >
                     <span className="max-w-[140px] truncate">{log.name}</span>
                     <button
+                      onClick={() => {
+                        const blob = new Blob([log.rawContent], { type: 'text/plain' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `${log.name}.log`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      }}
+                      className="hover:opacity-100 opacity-60 transition-opacity cursor-pointer"
+                      title={`Download ${log.name}`}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                        <polyline points="7 10 12 15 17 10" />
+                        <line x1="12" y1="15" x2="12" y2="3" />
+                      </svg>
+                    </button>
+                    <button
                       onClick={() => handleRemoveLog(log.id)}
-                      className="ml-0.5 hover:opacity-100 opacity-60 transition-opacity cursor-pointer"
+                      className="hover:opacity-100 opacity-60 transition-opacity cursor-pointer"
                       title={`Remove ${log.name}`}
                     >
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
