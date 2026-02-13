@@ -194,3 +194,31 @@ export function formatDuration(ms: number): string {
   const min = Math.round((ms % 3600000) / 60000);
   return `${hr}h ${min}m`;
 }
+
+/** Detect if an event represents an async dispatch (Future call or Queueable enqueue) */
+export function isAsyncDispatch(event: LogEvent): 'future' | 'queueable' | null {
+  const { eventType, detail } = event;
+  const raw = event.raw;
+
+  // Future method invocation — CODE_UNIT_STARTED with __sfdc_invocation (future pattern)
+  if (eventType === 'CODE_UNIT_STARTED' && /\bfuture\b/i.test(detail)) return 'future';
+  if (eventType === 'METHOD_ENTRY' && /\bfuture\b/i.test(detail)) return 'future';
+
+  // Queueable enqueue — System.enqueueJob in the detail
+  if (/System\.enqueueJob/i.test(detail)) return 'queueable';
+  if (/\benqueueJob\b/i.test(detail)) return 'queueable';
+
+  // LIMIT_USAGE_FOR_NS lines listing async invocations
+  if (eventType === 'LIMIT_USAGE_FOR_NS') {
+    if (/Number of future calls:\s*(\d+)/.test(raw)) {
+      const match = /Number of future calls:\s*(\d+)/.exec(raw);
+      if (match && Number.parseInt(match[1]) > 0) return 'future';
+    }
+    if (/Number of queueable jobs added:\s*(\d+)/.test(raw)) {
+      const match = /Number of queueable jobs added:\s*(\d+)/.exec(raw);
+      if (match && Number.parseInt(match[1]) > 0) return 'queueable';
+    }
+  }
+
+  return null;
+}

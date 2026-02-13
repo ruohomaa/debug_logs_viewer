@@ -1,5 +1,6 @@
 import { useMemo, useState, useRef, useCallback, useEffect } from 'react';
 import type { LogEvent, LoadedLog } from '../types';
+import { isAsyncDispatch } from '../logParser';
 
 interface Props {
   readonly events: LogEvent[];
@@ -199,6 +200,7 @@ interface DiagramMessage {
   sourceLogName: string;
   sourceColor: string;
   calloutEndpoint?: string;
+  asyncType?: 'future' | 'queueable' | null;
 }
 
 interface ParFragment {
@@ -277,6 +279,7 @@ function layoutMessages(
       sourceLogName: e.sourceLogName || '',
       sourceColor: e.sourceColor || '#6c8cff',
       calloutEndpoint,
+      asyncType: isAsyncDispatch(e),
     });
     y += MSG_HEIGHT + MSG_GAP;
   }
@@ -771,6 +774,36 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
                 style={{ cursor: 'pointer' }}
               >
                 {renderArrow(msg, arrowY, isHovered, endpointXMap)}
+
+                {/* Async dispatch badge */}
+                {msg.asyncType && (() => {
+                  const asyncColor = msg.asyncType === 'future' ? '#fb923c' : '#c084fc';
+                  const asyncLabel = msg.asyncType === 'future' ? '⚡ future' : '⚡ queueable';
+                  const badgeWidth = msg.asyncType === 'future' ? 52 : 70;
+                  const badgeX = msg.direction === 'self-server'
+                    ? SERVER_X + 68
+                    : msg.direction === 'client-to-server'
+                      ? (CLIENT_X + SERVER_X) / 2
+                      : (CLIENT_X + SERVER_X) / 2;
+                  const badgeY = arrowY + 6;
+                  return (
+                    <g>
+                      <rect
+                        x={badgeX - badgeWidth / 2} y={badgeY}
+                        width={badgeWidth} height={14} rx={7}
+                        fill={asyncColor} fillOpacity={0.2}
+                        stroke={asyncColor} strokeWidth={0.8} strokeOpacity={0.6}
+                      />
+                      <text
+                        x={badgeX} y={badgeY + 10}
+                        textAnchor="middle" fill={asyncColor}
+                        fontSize={8} fontWeight={600} fontFamily="system-ui"
+                      >
+                        {asyncLabel}
+                      </text>
+                    </g>
+                  );
+                })()}
 
                 {/* Relative elapsed time */}
                 {(() => {

@@ -10,6 +10,7 @@ import StatsBar from './components/StatsBar';
 import TimelineBar from './components/TimelineBar';
 import EventList from './components/EventList';
 import SequenceDiagram from './components/SequenceDiagram';
+import TreeView from './components/TreeView';
 import DetailPanel from './components/DetailPanel';
 
 export default function App() {
@@ -40,7 +41,7 @@ export default function App() {
   const [groupByRequest, setGroupByRequest] = useState(false);
 
   // ── View mode ──
-  const [viewMode, setViewMode] = useState<'list' | 'diagram'>('list');
+  const [viewMode, setViewMode] = useState<'list' | 'diagram' | 'tree'>('list');
 
   // ── Detail panel ──
   const [selectedEvent, setSelectedEvent] = useState<LogEvent | null>(null);
@@ -445,6 +446,27 @@ export default function App() {
                       <polygon points="8,14.5 6,16 8,17.5" fill="currentColor" />
                     </svg>
                   </button>
+                  <button
+                    onClick={() => setViewMode('tree')}
+                    className={`px-2.5 py-1.5 text-xs rounded-md cursor-pointer transition-colors ${
+                      viewMode === 'tree'
+                        ? 'bg-[var(--accent)] text-white'
+                        : 'bg-[var(--surface2)] text-[var(--text-dim)] hover:bg-[var(--border)]'
+                    }`}
+                    title="Tree structure view"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="12" cy="4" r="2" />
+                      <line x1="12" y1="6" x2="12" y2="10" />
+                      <line x1="6" y1="10" x2="18" y2="10" />
+                      <line x1="6" y1="10" x2="6" y2="14" />
+                      <line x1="18" y1="10" x2="18" y2="14" />
+                      <circle cx="6" cy="16" r="2" />
+                      <circle cx="18" cy="16" r="2" />
+                      <line x1="12" y1="10" x2="12" y2="14" />
+                      <circle cx="12" cy="16" r="2" />
+                    </svg>
+                  </button>
                 </div>
               </div>
               <StatsBar events={filteredEvents} logs={loadedLogs} />
@@ -500,14 +522,22 @@ export default function App() {
               </div>
 
               <TimelineBar events={filteredEvents} logs={loadedLogs} />
-              {viewMode === 'list' ? (
+              {viewMode === 'list' && (
                 <EventList
                   events={filteredEvents}
                   showGaps={showGaps}
                   density={density}
                   onSelectEvent={setSelectedEvent}
                 />
-              ) : (
+              )}
+              {viewMode === 'tree' && (
+                <TreeView
+                  events={filteredEvents}
+                  density={density}
+                  onSelectEvent={setSelectedEvent}
+                />
+              )}
+              {viewMode === 'diagram' && (
                 <SequenceDiagram
                   events={filteredEvents}
                   logs={loadedLogs}

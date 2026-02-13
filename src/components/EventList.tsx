@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useCallback } from 'react';
 import type { LogEvent } from '../types';
 import { getLevelColor } from '../constants';
-import { formatDuration } from '../logParser';
+import { formatDuration, isAsyncDispatch } from '../logParser';
 
 interface Props {
   events: LogEvent[];
@@ -73,28 +73,48 @@ export default function EventList({ events, showGaps, density, onSelectEvent }: 
                   <span />
                 </div>
               )}
-              <div
-                className={`grid grid-cols-[160px_140px_1fr] gap-2 ${paddingY} px-2 ${fontSize} font-mono border-b border-b-[rgba(46,51,68,0.4)] hover:bg-[var(--surface2)] cursor-pointer transition-colors`}
-                onClick={() => onSelectEvent(e)}
-                title="Click for full detail"
-              >
-                <span className="text-[var(--text-dim)] whitespace-nowrap flex items-center">
-                  <span
-                    className="inline-block w-2 h-2 rounded-full mr-1.5 flex-shrink-0"
-                    style={{ background: e.sourceColor || '#6c8cff' }}
-                  />
-                  {e.timeStr}
-                </span>
-                <span
-                  className="font-medium whitespace-nowrap overflow-hidden text-ellipsis"
-                  style={{ color: getLevelColor(e.level) }}
-                >
-                  {e.eventType}
-                </span>
-                <span className="text-[var(--text-dim)] whitespace-nowrap overflow-hidden text-ellipsis">
-                  {e.detail.split('\n')[0].substring(0, 200)}
-                </span>
-              </div>
+              {(() => {
+                const asyncType = isAsyncDispatch(e);
+                return (
+                  <div
+                    className={`grid grid-cols-[160px_140px_1fr] gap-2 ${paddingY} px-2 ${fontSize} font-mono border-b border-b-[rgba(46,51,68,0.4)] hover:bg-[var(--surface2)] cursor-pointer transition-colors ${
+                      asyncType ? 'border-l-[3px] border-l-[#c084fc]' : ''
+                    }`}
+                    style={asyncType ? { background: 'rgba(192,132,252,0.04)' } : undefined}
+                    onClick={() => onSelectEvent(e)}
+                    title="Click for full detail"
+                  >
+                    <span className="text-[var(--text-dim)] whitespace-nowrap flex items-center">
+                      <span
+                        className="inline-block w-2 h-2 rounded-full mr-1.5 flex-shrink-0"
+                        style={{ background: e.sourceColor || '#6c8cff' }}
+                      />
+                      {e.timeStr}
+                    </span>
+                    <span
+                      className="font-medium whitespace-nowrap overflow-hidden text-ellipsis flex items-center gap-1"
+                      style={{ color: getLevelColor(e.level) }}
+                    >
+                      {e.eventType}
+                      {asyncType && (
+                        <span
+                          className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded-full text-[9px] font-semibold uppercase tracking-wider"
+                          style={{
+                            background: asyncType === 'future' ? 'rgba(251,146,60,0.15)' : 'rgba(192,132,252,0.15)',
+                            color: asyncType === 'future' ? '#fb923c' : '#c084fc',
+                            border: `1px solid ${asyncType === 'future' ? 'rgba(251,146,60,0.3)' : 'rgba(192,132,252,0.3)'}`,
+                          }}
+                        >
+                          ⚡ {asyncType}
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-[var(--text-dim)] whitespace-nowrap overflow-hidden text-ellipsis">
+                      {e.detail.split('\n')[0].substring(0, 200)}
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
           );
         })}
