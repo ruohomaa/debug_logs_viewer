@@ -263,6 +263,26 @@ export default function App() {
     }
   }, [handleDropLog]);
 
+  // ── Remove a single loaded log ──
+  const handleRemoveLog = useCallback((logId: string) => {
+    const remaining = loadedLogs.filter((l) => l.id !== logId);
+    setLoadedLogs(remaining);
+    if (remaining.length === 0) {
+      setCombinedEvents([]);
+      setShowResults(false);
+    } else {
+      const toMerge = remaining.map((l) => ({ events: l.events, id: l.id, name: l.name, color: l.color }));
+      setCombinedEvents(combineLogEvents(toMerge));
+    }
+  }, [loadedLogs]);
+
+  // ── Clear all loaded logs ──
+  const handleClearAllLogs = useCallback(() => {
+    setLoadedLogs([]);
+    setCombinedEvents([]);
+    setShowResults(false);
+  }, []);
+
   // Filtered events
   const filteredEvents = useMemo(
     () => filterEvents(combinedEvents, search, level, category),
@@ -428,6 +448,38 @@ export default function App() {
                 </div>
               </div>
               <StatsBar events={filteredEvents} logs={loadedLogs} />
+
+              {/* Loaded logs chips */}
+              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-[var(--surface)] border-b border-[var(--border)] flex-wrap">
+                {loadedLogs.map((log) => (
+                  <span
+                    key={log.id}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium"
+                    style={{ background: `${log.color}22`, color: log.color, border: `1px solid ${log.color}44` }}
+                  >
+                    <span className="max-w-[140px] truncate">{log.name}</span>
+                    <button
+                      onClick={() => handleRemoveLog(log.id)}
+                      className="ml-0.5 hover:opacity-100 opacity-60 transition-opacity cursor-pointer"
+                      title={`Remove ${log.name}`}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    </button>
+                  </span>
+                ))}
+                {loadedLogs.length > 1 && (
+                  <button
+                    onClick={handleClearAllLogs}
+                    className="px-2 py-0.5 text-[11px] text-[var(--danger)] hover:bg-[rgba(255,107,107,0.1)] rounded-full transition-colors cursor-pointer"
+                  >
+                    Clear all
+                  </button>
+                )}
+              </div>
+
               <TimelineBar events={filteredEvents} logs={loadedLogs} />
               {viewMode === 'list' ? (
                 <EventList
