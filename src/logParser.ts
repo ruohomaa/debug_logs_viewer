@@ -157,17 +157,9 @@ export function getCategories(events: LogEvent[]): string[] {
 export function filterEvents(
   events: LogEvent[],
   search: string,
-  level: string,
-  category: string
 ): LogEvent[] {
   let filtered = events;
 
-  if (level !== 'all') {
-    filtered = filtered.filter((e) => e.level === level);
-  }
-  if (category !== 'all') {
-    filtered = filtered.filter((e) => e.category === category);
-  }
   if (search) {
     try {
       const re = new RegExp(search, 'i');

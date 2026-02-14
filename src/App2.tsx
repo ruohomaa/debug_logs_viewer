@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, type DragEvent } from 'react';
 import type { SfConnection, ApexLogRecord, LoadedLog, LogEvent } from './types';
 import { fetchApexLogs, fetchLogBody } from './api';
-import { parseSalesforceLog, combineLogEvents, filterEvents, getCategories } from './logParser';
+import { parseSalesforceLog, combineLogEvents, filterEvents } from './logParser';
 import { LOG_COLORS } from './constants';
 import ConnectPanel from './components/ConnectPanel';
 import LogListPanel from './components/LogListPanel';
@@ -36,8 +36,6 @@ export default function App() {
 
   // ── Filters ──
   const [search, setSearch] = useState('');
-  const [level, setLevel] = useState('all');
-  const [category, setCategory] = useState('all');
   const [density, setDensity] = useState<'default' | 'compact' | 'comfortable'>('default');
   const [showGaps, setShowGaps] = useState(false);
   const [groupByRequest, setGroupByRequest] = useState(false);
@@ -292,16 +290,14 @@ export default function App() {
   // Filtered events
   const filteredEvents = useMemo(
     () => {
-      let result = filterEvents(combinedEvents, search, level, category);
+      let result = filterEvents(combinedEvents, search);
       if (hiddenCategories.size > 0) {
         result = result.filter((e) => !hiddenCategories.has(getCategoryId(e.eventType)));
       }
       return result;
     },
-    [combinedEvents, search, level, category, hiddenCategories]
+    [combinedEvents, search, hiddenCategories]
   );
-
-  const categories = useMemo(() => getCategories(combinedEvents), [combinedEvents]);
 
   // ── Render ──
 
@@ -408,11 +404,6 @@ export default function App() {
                 <Toolbar
                   search={search}
                   onSearchChange={setSearch}
-                  level={level}
-                  onLevelChange={setLevel}
-                  category={category}
-                  onCategoryChange={setCategory}
-                  categories={categories}
                   density={density}
                   onDensityChange={setDensity}
                   showGaps={showGaps}
