@@ -11,7 +11,9 @@ import TimelineBar from './components/TimelineBar';
 import EventList from './components/EventList';
 import SequenceDiagram from './components/SequenceDiagram';
 import TreeView from './components/TreeView';
+import CategoryFilter from './components/CategoryFilter';
 import DetailPanel from './components/DetailPanel';
+import { getCategoryId } from './eventCategories';
 
 export default function App() {
   // ── Connection state ──
@@ -42,6 +44,9 @@ export default function App() {
 
   // ── View mode ──
   const [viewMode, setViewMode] = useState<'list' | 'diagram' | 'tree'>('list');
+
+  // ── Hidden event categories ──
+  const [hiddenCategories, setHiddenCategories] = useState<Set<string>>(new Set());
 
   // ── Detail panel ──
   const [selectedEvent, setSelectedEvent] = useState<LogEvent | null>(null);
@@ -286,8 +291,14 @@ export default function App() {
 
   // Filtered events
   const filteredEvents = useMemo(
-    () => filterEvents(combinedEvents, search, level, category),
-    [combinedEvents, search, level, category]
+    () => {
+      let result = filterEvents(combinedEvents, search, level, category);
+      if (hiddenCategories.size > 0) {
+        result = result.filter((e) => !hiddenCategories.has(getCategoryId(e.eventType)));
+      }
+      return result;
+    },
+    [combinedEvents, search, level, category, hiddenCategories]
   );
 
   const categories = useMemo(() => getCategories(combinedEvents), [combinedEvents]);
@@ -520,6 +531,19 @@ export default function App() {
                   </button>
                 )}
               </div>
+
+              <CategoryFilter
+                hiddenCategories={hiddenCategories}
+                onToggleCategory={(catId) => {
+                  setHiddenCategories((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(catId)) next.delete(catId);
+                    else next.add(catId);
+                    return next;
+                  });
+                }}
+                onShowAll={() => setHiddenCategories(new Set())}
+              />
 
               <TimelineBar events={filteredEvents} logs={loadedLogs} />
               {viewMode === 'list' && (

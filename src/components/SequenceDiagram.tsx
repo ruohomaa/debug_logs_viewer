@@ -62,34 +62,6 @@ function extractCalloutEndpoint(detail: string): string {
   return 'External Service';
 }
 
-// ── Event categories for filtering ──
-interface EventCategory {
-  readonly id: string;
-  readonly label: string;
-  readonly color: string;
-  readonly match: (eventType: string) => boolean;
-}
-
-const EVENT_CATEGORIES: EventCategory[] = [
-  { id: 'execution', label: 'Execution', color: '#6c8cff', match: (t) => /EXECUTION/.test(t) },
-  { id: 'code-unit', label: 'Code Units', color: '#8b90a0', match: (t) => /CODE_UNIT|METHOD|CONSTRUCTOR/.test(t) },
-  { id: 'dml', label: 'DML', color: '#4ecdc4', match: (t) => /DML/.test(t) },
-  { id: 'soql', label: 'SOQL/SOSL', color: '#60a5fa', match: (t) => /SOQL|SOSL/.test(t) },
-  { id: 'callout', label: 'Callouts', color: '#fb923c', match: (t) => /CALLOUT/.test(t) },
-  { id: 'trigger', label: 'Triggers', color: '#f472b6', match: (t) => /TRIGGER/.test(t) },
-  { id: 'flow', label: 'Flows', color: '#c084fc', match: (t) => /FLOW/.test(t) },
-  { id: 'debug', label: 'Debug', color: '#ffd93d', match: (t) => /USER_DEBUG/.test(t) },
-  { id: 'error', label: 'Errors', color: '#ff6b6b', match: (t) => /EXCEPTION|FATAL|ERROR/.test(t) },
-  { id: 'other', label: 'Other', color: '#8b90a0', match: (t) => /VALIDATION|VF_|LIMIT/.test(t) },
-];
-
-function getCategoryId(eventType: string): string {
-  for (const cat of EVENT_CATEGORIES) {
-    if (cat.match(eventType)) return cat.id;
-  }
-  return 'other';
-}
-
 /** Format elapsed milliseconds as a readable relative string */
 function formatRelativeMs(ms: number): string {
   if (ms < 0) return '+0 ms';
@@ -446,16 +418,6 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
   const [zoom, setZoom] = useState(1);
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const [filter, setFilter] = useState<'all' | 'significant'>('significant');
-  const [hiddenCategories, setHiddenCategories] = useState<Set<string>>(new Set());
-
-  const toggleCategory = useCallback((catId: string) => {
-    setHiddenCategories((prev) => {
-      const next = new Set(prev);
-      if (next.has(catId)) next.delete(catId);
-      else next.add(catId);
-      return next;
-    });
-  }, []);
 
   const selectedLogs = useMemo(() => logs.filter((l) => l.selected), [logs]);
 
@@ -505,7 +467,7 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
     const filtered = (filter === 'significant'
       ? events.filter((e) => SIGNIFICANT_EVENTS.has(e.eventType))
       : events
-    ).filter((e) => !hiddenCategories.has(getCategoryId(e.eventType)));
+    );
 
     if (filtered.length === 0 || selectedLogs.length === 0) {
       return { messages: [] as DiagramMessage[], parFragments: [] as ParFragment[], totalHeight: HEADER_HEIGHT + 100 };
@@ -535,7 +497,7 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
     }
 
     return { messages: allMessages, parFragments: fragments, totalHeight: currentY + 40 };
-  }, [events, filter, selectedLogs, hiddenCategories]);
+  }, [events, filter, selectedLogs]);
 
   // Zoom controls
   const handleZoomIn = useCallback(() => setZoom((z) => Math.min(z + 0.25, 3)), []);
@@ -602,40 +564,6 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
           <span className="text-xs text-[var(--text)] min-w-[40px] text-center">{Math.round(zoom * 100)}%</span>
           <button onClick={handleZoomIn} className="w-6 h-6 flex items-center justify-center bg-[var(--surface2)] border border-[var(--border)] rounded text-[var(--text)] text-xs hover:bg-[var(--border)] cursor-pointer transition-colors">+</button>
           <button onClick={handleZoomReset} className="px-2 py-0.5 bg-[var(--surface2)] border border-[var(--border)] rounded text-[var(--text)] text-xs hover:bg-[var(--border)] cursor-pointer transition-colors">Reset</button>
-        </div>
-        {/* Category filters */}
-        <div className="flex items-center gap-1.5 px-5 py-1.5 border-t border-[var(--border)] flex-wrap">
-          <span className="text-xs text-[var(--text-dim)] mr-1">Show:</span>
-          {EVENT_CATEGORIES.map((cat) => {
-            const isHidden = hiddenCategories.has(cat.id);
-            return (
-              <button
-                key={cat.id}
-                onClick={() => toggleCategory(cat.id)}
-                className={`px-2 py-0.5 text-[10px] font-medium rounded-full cursor-pointer transition-all border ${
-                  isHidden
-                    ? 'border-[var(--border)] text-[var(--text-dim)] bg-transparent opacity-40 line-through'
-                    : 'border-transparent'
-                }`}
-                style={
-                  isHidden
-                    ? undefined
-                    : { backgroundColor: cat.color + '20', color: cat.color, borderColor: cat.color + '40' }
-                }
-                title={isHidden ? `Show ${cat.label}` : `Hide ${cat.label}`}
-              >
-                {cat.label}
-              </button>
-            );
-          })}
-          {hiddenCategories.size > 0 && (
-            <button
-              onClick={() => setHiddenCategories(new Set())}
-              className="px-2 py-0.5 text-[10px] text-[var(--accent)] bg-transparent border border-[var(--border)] rounded-full cursor-pointer hover:bg-[var(--surface2)] transition-colors ml-1"
-            >
-              Show all
-            </button>
-          )}
         </div>
       </div>
 

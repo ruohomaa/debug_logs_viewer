@@ -43,6 +43,9 @@ export default function TreeView({ events, density, onSelectEvent }: Props) {
   const paddingY = paddingMap[density];
   const fontSize = fontMap[density];
 
+  // Compute the start time for elapsed time display
+  const startTime = events.length > 0 ? events[0].absoluteTimestamp : 0;
+
   if (events.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center text-[var(--text-dim)] text-sm">
@@ -90,6 +93,7 @@ export default function TreeView({ events, density, onSelectEvent }: Props) {
             depth={0}
             paddingY={paddingY}
             fontSize={fontSize}
+            startTime={startTime}
             onSelectEvent={onSelectEvent}
           />
         ))}
@@ -105,12 +109,14 @@ function TreeNodeRow({
   depth,
   paddingY,
   fontSize,
+  startTime,
   onSelectEvent,
 }: {
   node: TreeNode;
   depth: number;
   paddingY: number;
   fontSize: number;
+  startTime: number;
   onSelectEvent: (event: LogEvent) => void;
 }) {
   const [expanded, setExpanded] = useState(node.expanded);
@@ -195,9 +201,9 @@ function TreeNodeRow({
           {event.eventType}
         </span>
 
-        {/* Time */}
-        <span className="text-[var(--text-dim)] whitespace-nowrap flex-shrink-0 ml-1">
-          {event.timeStr}
+        {/* Elapsed time */}
+        <span className="text-[var(--text-dim)] whitespace-nowrap flex-shrink-0 ml-1" title={event.timeStr}>
+          +{formatDuration(event.absoluteTimestamp - startTime)}
         </span>
 
         {/* Duration badge (for BEGIN nodes) */}
@@ -238,8 +244,7 @@ function TreeNodeRow({
               node={child}
               depth={1}
               paddingY={paddingY}
-              fontSize={fontSize}
-              onSelectEvent={onSelectEvent}
+              fontSize={fontSize}              startTime={startTime}              onSelectEvent={onSelectEvent}
             />
           ))}
         </div>
