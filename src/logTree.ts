@@ -59,14 +59,53 @@ BEGIN_EVENTS.delete('HEAP_ALLOCATE');
  * subsequent events become children. When a matching END event appears,
  * pop the stack.
  */
+const FLOW_LIMIT_EVENT_TYPES = new Set([
+  'FLOW_START_INTERVIEW_LIMIT_USAGE',
+  'FLOW_INTERVIEW_FINISHED_LIMIT_USAGE',
+  'FLOW_BULK_ELEMENT_LIMIT_USAGE',
+]);
+
+/**
+ * Pre-process events to group consecutive flow limit usage
+ * events of the same type into a single synthetic event.
+ */
+function groupFlowInterviewLimits(events: LogEvent[]): LogEvent[] {
+  const result: LogEvent[] = [];
+  let cursor = 0;
+  while (cursor < events.length) {
+    const evtType = events[cursor].eventType;
+    if (!FLOW_LIMIT_EVENT_TYPES.has(evtType)) {
+      result.push(events[cursor]);
+      cursor++;
+      continue;
+    }
+    // Collect consecutive limit events of the same type
+    const start = cursor;
+    while (
+      cursor < events.length &&
+      events[cursor].eventType === evtType
+    ) {
+      cursor++;
+    }
+    const limitLines = events.slice(start, cursor);
+    result.push({
+      ...limitLines[0],
+      detail: limitLines.map((e) => e.detail).join('\n'),
+      raw: limitLines.map((e) => e.raw).join('\n'),
+    });
+  }
+  return result;
+}
+
 export function buildLogTree(events: LogEvent[]): TreeNode[] {
+  const grouped = groupFlowInterviewLimits(events);
   const roots: TreeNode[] = [];
   const stack: TreeNode[] = [];
 
   const currentChildren = () =>
     stack.length > 0 ? stack.at(-1)!.children : roots;
 
-  for (const event of events) {
+  for (const event of grouped) {
     const { eventType } = event;
 
     // Is this an END event?  Pop the stack up to its matching BEGIN.
@@ -179,6 +218,9 @@ export function getEventIcon(eventType: string): { icon: string; color: string }
     LIMIT_USAGE_FOR_NS: { icon: '📊', color: '#ffd93d' },
     CUMULATIVE_LIMIT_USAGE: { icon: '📊', color: '#ffd93d' },
     CUMULATIVE_LIMIT_USAGE_END: { icon: '📊', color: '#ffd93d' },
+    FLOW_START_INTERVIEW_LIMIT_USAGE: { icon: '📊', color: '#c084fc' },
+    FLOW_INTERVIEW_FINISHED_LIMIT_USAGE: { icon: '📊', color: '#c084fc' },
+    FLOW_BULK_ELEMENT_LIMIT_USAGE: { icon: '📊', color: '#c084fc' },
     WF_CRITERIA_BEGIN: { icon: '📏', color: '#c084fc' },
     WF_CRITERIA_END: { icon: '📏', color: '#c084fc' },
     WF_SPOOL_ACTION_BEGIN: { icon: '⏱', color: '#ffd93d' },
