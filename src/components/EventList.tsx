@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback } from 'react';
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import type { LogEvent } from '../types';
 import { getLevelColor } from '../constants';
 import { formatDuration, isAsyncDispatch } from '../logParser';
@@ -8,13 +8,15 @@ interface Props {
   showGaps: boolean;
   density: 'default' | 'compact' | 'comfortable';
   onSelectEvent: (event: LogEvent) => void;
+  scrollToIndex?: number | null;
 }
 
 const PAGE_SIZE = 400;
 
-export default function EventList({ events, showGaps, density, onSelectEvent }: Props) {
+export default function EventList({ events, showGaps, density, onSelectEvent, scrollToIndex }: Props) {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [highlightIndex, setHighlightIndex] = useState<number | null>(null);
 
   // Reset visible count when events change
   const eventsRef = useRef(events);
@@ -35,6 +37,30 @@ export default function EventList({ events, showGaps, density, onSelectEvent }: 
   }, [events.length]);
 
   const visibleEvents = useMemo(() => events.slice(0, visibleCount), [events, visibleCount]);
+
+  // Scroll to a specific event index when requested
+  useEffect(() => {
+    if (scrollToIndex == null || scrollToIndex < 0 || scrollToIndex >= events.length) return;
+    // Expand visible count if needed
+    if (scrollToIndex >= visibleCount) {
+      setVisibleCount(scrollToIndex + PAGE_SIZE);
+    }
+    // Wait a tick so DOM has rendered the target row
+    requestAnimationFrame(() => {
+      const container = containerRef.current;
+      if (!container) return;
+      const rows = container.querySelectorAll('[data-event-index]');
+      for (const row of rows) {
+        if ((row as HTMLElement).dataset.eventIndex === String(scrollToIndex)) {
+          row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          break;
+        }
+      }
+    });
+    setHighlightIndex(scrollToIndex);
+    const timeout = setTimeout(() => setHighlightIndex(null), 2000);
+    return () => clearTimeout(timeout);
+  }, [scrollToIndex]);
 
   const paddingY = density === 'compact' ? 'py-px' : density === 'comfortable' ? 'py-1.5' : 'py-1';
   const fontSize = density === 'compact' ? 'text-[11px]' : density === 'comfortable' ? 'text-[13px]' : 'text-xs';
@@ -62,7 +88,7 @@ export default function EventList({ events, showGaps, density, onSelectEvent }: 
           }
 
           return (
-            <div key={`${e.sourceLogId}-${e.lineNum}-${i}`}>
+            <div key={`${e.sourceLogId}-${e.lineNum}-${i}`} data-event-index={i}>
               {gap !== null && (
                 <div
                   className={`grid grid-cols-[160px_140px_1fr] gap-2 ${paddingY} px-2 ${fontSize} font-mono border-l-[3px] border-l-[var(--accent)]`}
@@ -75,12 +101,19 @@ export default function EventList({ events, showGaps, density, onSelectEvent }: 
               )}
               {(() => {
                 const asyncType = isAsyncDispatch(e);
+                const isHighlighted = highlightIndex === i;
                 return (
                   <div
                     className={`grid grid-cols-[160px_140px_1fr] gap-2 ${paddingY} px-2 ${fontSize} font-mono border-b border-b-[rgba(46,51,68,0.4)] hover:bg-[var(--surface2)] cursor-pointer transition-colors ${
                       asyncType ? 'border-l-[3px] border-l-[#c084fc]' : ''
-                    }`}
-                    style={asyncType ? { background: 'rgba(192,132,252,0.04)' } : undefined}
+                    } ${isHighlighted ? 'ring-1 ring-[var(--accent)] ring-inset' : ''}`}
+                    style={
+                      isHighlighted
+                        ? { background: 'rgba(108,140,255,0.12)' }
+                        : asyncType
+                          ? { background: 'rgba(192,132,252,0.04)' }
+                          : undefined
+                    }
                     onClick={() => onSelectEvent(e)}
                     title="Click for full detail"
                   >

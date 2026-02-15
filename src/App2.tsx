@@ -49,6 +49,9 @@ export default function App() {
   // ── Detail panel ──
   const [selectedEvent, setSelectedEvent] = useState<LogEvent | null>(null);
 
+  // ── Timeline scroll target ──
+  const [scrollToEventIndex, setScrollToEventIndex] = useState<number | null>(null);
+
   // ── Color tracker ──
   const [colorIndex, setColorIndex] = useState(0);
 
@@ -612,13 +615,32 @@ export default function App() {
                 onShowAll={() => setHiddenCategories(new Set())}
               />
 
-              <TimelineBar events={filteredEvents} logs={loadedLogs} />
+              <TimelineBar
+                events={filteredEvents}
+                logs={loadedLogs}
+                onClickTimestamp={(ts) => {
+                  // Find the event closest to the clicked timestamp
+                  let bestIdx = 0;
+                  let bestDist = Infinity;
+                  for (let i = 0; i < filteredEvents.length; i++) {
+                    const dist = Math.abs(filteredEvents[i].absoluteTimestamp - ts);
+                    if (dist < bestDist) {
+                      bestDist = dist;
+                      bestIdx = i;
+                    }
+                  }
+                  // Toggle to force re-trigger even for the same index
+                  setScrollToEventIndex(null);
+                  requestAnimationFrame(() => setScrollToEventIndex(bestIdx));
+                }}
+              />
               {viewMode === 'list' && (
                 <EventList
                   events={filteredEvents}
                   showGaps={showGaps}
                   density={density}
                   onSelectEvent={setSelectedEvent}
+                  scrollToIndex={scrollToEventIndex}
                 />
               )}
               {viewMode === 'tree' && (

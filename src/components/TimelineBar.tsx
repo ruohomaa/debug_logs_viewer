@@ -1,12 +1,15 @@
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import type { LogEvent, LoadedLog } from '../types';
 
 interface Props {
   events: LogEvent[];
   logs: LoadedLog[];
+  onClickTimestamp?: (timestamp: number) => void;
 }
 
-export default function TimelineBar({ events, logs }: Props) {
+export default function TimelineBar({ events, logs, onClickTimestamp }: Props) {
+  const barRef = useRef<HTMLDivElement>(null);
+
   const { minT, span } = useMemo(() => {
     const timestamps = events.map((e) => e.absoluteTimestamp).filter((t) => t > 0);
     if (timestamps.length === 0) return { minT: 0, maxT: 0, span: 1 };
@@ -51,7 +54,17 @@ export default function TimelineBar({ events, logs }: Props) {
   return (
     <div className="bg-[var(--surface)] border-b border-[var(--border)] px-5 py-3">
       {/* Bar */}
-      <div className="relative h-12 bg-[var(--surface2)] rounded-md overflow-hidden mb-1.5">
+      <div
+        ref={barRef}
+        className="relative h-12 bg-[var(--surface2)] rounded-md overflow-hidden mb-1.5 cursor-crosshair"
+        onClick={(e) => {
+          if (!onClickTimestamp || !barRef.current) return;
+          const rect = barRef.current.getBoundingClientRect();
+          const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+          const timestamp = minT + fraction * span;
+          onClickTimestamp(timestamp);
+        }}
+      >
         {/* Tick marks */}
         {Array.from({ length: tickCount + 1 }).map((_, i) => (
           <div
