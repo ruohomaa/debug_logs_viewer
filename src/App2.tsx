@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, type DragEvent } from 'react';
+import { useState, useMemo, useCallback, useRef, type DragEvent } from 'react';
 import type { SfConnection, ApexLogRecord, LoadedLog, LogEvent } from './types';
 import { fetchApexLogs, fetchLogBody } from './api';
 import { parseSalesforceLog, combineLogEvents, filterEvents } from './logParser';
@@ -54,6 +54,48 @@ export default function App() {
 
   // ── Drag-and-drop state ──
   const [isDragOver, setIsDragOver] = useState(false);
+
+  // ── Sidebar resize state ──
+  const [sidebarWidth, setSidebarWidth] = useState(350);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const isResizing = useRef(false);
+  const sidebarWidthBeforeCollapse = useRef(350);
+
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizing.current = true;
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!isResizing.current) return;
+      const newWidth = Math.max(200, Math.min(800, startWidth + (ev.clientX - startX)));
+      setSidebarWidth(newWidth);
+    };
+
+    const onMouseUp = () => {
+      isResizing.current = false;
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }, [sidebarWidth]);
+
+  const toggleSidebar = useCallback(() => {
+    if (sidebarCollapsed) {
+      setSidebarCollapsed(false);
+      setSidebarWidth(sidebarWidthBeforeCollapse.current);
+    } else {
+      sidebarWidthBeforeCollapse.current = sidebarWidth;
+      setSidebarCollapsed(true);
+    }
+  }, [sidebarCollapsed, sidebarWidth]);
 
   // After connecting, load logs
   const handleConnected = useCallback(async (conn: SfConnection) => {
@@ -330,24 +372,58 @@ export default function App() {
         }}
       />
 
-      <div className="flex-1 grid grid-cols-[350px_1fr] overflow-hidden">
+      <div className="flex-1 flex overflow-hidden">
         {/* Sidebar */}
-        <aside className="bg-[var(--surface)] border-r border-[var(--border)] overflow-hidden flex flex-col">
-          <LogListPanel
-            logs={apexLogs}
-            selectedIds={selectedIds}
-            onToggle={handleToggle}
-            onSelectGroup={handleSelectGroup}
-            onFetchAndCombine={handleFetchAndCombine}
-            loadingBody={loadingBody}
-            groupByRequest={groupByRequest}
-            onToggleGrouping={() => setGroupByRequest(!groupByRequest)}
-          />
+        <aside
+          className="bg-[var(--surface)] border-r border-[var(--border)] overflow-hidden flex flex-col flex-shrink-0 transition-[width] duration-200"
+          style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
+        >
+          {!sidebarCollapsed && (
+            <LogListPanel
+              logs={apexLogs}
+              selectedIds={selectedIds}
+              onToggle={handleToggle}
+              onSelectGroup={handleSelectGroup}
+              onFetchAndCombine={handleFetchAndCombine}
+              loadingBody={loadingBody}
+              groupByRequest={groupByRequest}
+              onToggleGrouping={() => setGroupByRequest(!groupByRequest)}
+            />
+          )}
         </aside>
+
+        {/* Resize handle + collapse toggle */}
+        <div className="relative flex-shrink-0 group" style={{ width: sidebarCollapsed ? 0 : 4 }}>
+          {!sidebarCollapsed && (
+            <div
+              className="absolute inset-y-0 -left-1 w-2 cursor-col-resize z-20 hover:bg-[var(--accent)] transition-colors"
+              onMouseDown={handleResizeStart}
+            />
+          )}
+          <button
+            onClick={toggleSidebar}
+            className="absolute top-1/2 -translate-y-1/2 z-30 w-5 h-10 flex items-center justify-center bg-[var(--surface2)] border border-[var(--border)] rounded-r-md hover:bg-[var(--border)] cursor-pointer transition-colors"
+            style={{ left: sidebarCollapsed ? 0 : -1 }}
+            title={sidebarCollapsed ? 'Expand log list' : 'Collapse log list'}
+          >
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              className="text-[var(--text-dim)]"
+              style={{ transform: sidebarCollapsed ? 'rotate(180deg)' : undefined }}
+            >
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
+        </div>
 
         {/* Main */}
         <main
-          className={`flex flex-col overflow-hidden relative ${
+          className={`flex-1 min-w-0 flex flex-col overflow-hidden relative ${
             isDragOver ? 'ring-2 ring-inset ring-[var(--accent)] bg-[rgba(108,140,255,0.05)]' : ''
           }`}
           onDragOver={handleMainDragOver}

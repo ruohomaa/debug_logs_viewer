@@ -8,6 +8,65 @@ interface Props {
   readonly onSelectEvent: (event: LogEvent) => void;
 }
 
+// ── Salesforce subsystem participants ──
+interface SFSubsystem {
+  id: string;
+  label: string;
+  color: string;
+  eventMatcher: (eventType: string) => boolean;
+}
+
+const SF_SUBSYSTEMS: SFSubsystem[] = [
+  {
+    id: 'code',
+    label: 'Code',
+    color: '#8b90a0',
+    eventMatcher: (et) => /CODE_UNIT|METHOD_ENTRY|METHOD_EXIT|CONSTRUCTOR/.test(et),
+  },
+  {
+    id: 'soql',
+    label: 'SOQL',
+    color: '#60a5fa',
+    eventMatcher: (et) => /SOQL|SOSL/.test(et),
+  },
+  {
+    id: 'dml',
+    label: 'DML',
+    color: '#4ecdc4',
+    eventMatcher: (et) => /DML/.test(et),
+  },
+  {
+    id: 'flow',
+    label: 'Flow',
+    color: '#c084fc',
+    eventMatcher: (et) => /FLOW/.test(et),
+  },
+  {
+    id: 'trigger',
+    label: 'Trigger',
+    color: '#f472b6',
+    eventMatcher: (et) => /TRIGGER/.test(et),
+  },
+  {
+    id: 'validation',
+    label: 'Validation',
+    color: '#fbbf24',
+    eventMatcher: (et) => /VALIDATION/.test(et),
+  },
+  {
+    id: 'debug',
+    label: 'Debug',
+    color: '#ffd93d',
+    eventMatcher: (et) => et === 'USER_DEBUG',
+  },
+  {
+    id: 'error',
+    label: 'Error',
+    color: '#ff6b6b',
+    eventMatcher: (et) => /EXCEPTION|FATAL|ERROR/.test(et),
+  },
+];
+
 // ── Event types worth showing in the diagram ──
 const SIGNIFICANT_EVENTS = new Set([
   'CODE_UNIT_STARTED',
@@ -43,6 +102,14 @@ const SIGNIFICANT_EVENTS = new Set([
 
 const PARALLEL_TOLERANCE_MS = 1;
 
+/** Determine which SF subsystem an event belongs to */
+function getSFSubsystem(eventType: string): string {
+  for (const sys of SF_SUBSYSTEMS) {
+    if (sys.eventMatcher(eventType)) return sys.id;
+  }
+  return 'other';
+}
+
 /** Extract the host/endpoint from a CALLOUT_REQUEST or CALLOUT_RESPONSE detail string */
 function extractCalloutEndpoint(detail: string): string {
   // Try to extract a URL from the detail
@@ -62,26 +129,27 @@ function extractCalloutEndpoint(detail: string): string {
   return 'External Service';
 }
 
-/** Format elapsed milliseconds as a readable relative string */
-function formatRelativeMs(ms: number): string {
-  if (ms < 0) return '+0 ms';
-  if (ms < 1000) return `+${Math.round(ms)} ms`;
-  if (ms < 10000) return `+${(ms / 1000).toFixed(2)} s`;
-  if (ms < 60000) return `+${(ms / 1000).toFixed(1)} s`;
-  const min = Math.floor(ms / 60000);
-  const sec = Math.round((ms % 60000) / 1000);
-  return `+${min}m ${sec}s`;
-}
+/** Arrow source and target: either "client", "sf:<subsystem>", or "external:<endpoint>" */
+type ArrowSource = string; // "client" or "sf:code" etc
+type ArrowTarget = string; // "sf:code" or "external:endpoint" etc
 
-// ── Message direction: who is talking to whom ──
-type ArrowDir = 'client-to-server' | 'server-to-client' | 'server-to-external' | 'external-to-server' | 'self-server';
-
-function getArrowDirection(eventType: string): ArrowDir {
-  if (/EXECUTION_STARTED/.test(eventType)) return 'client-to-server';
-  if (/EXECUTION_FINISHED/.test(eventType)) return 'server-to-client';
-  if (/CALLOUT_REQUEST/.test(eventType)) return 'server-to-external';
-  if (/CALLOUT_RESPONSE/.test(eventType)) return 'external-to-server';
-  return 'self-server';
+function getArrowRoute(eventType: string): { source: ArrowSource; target: ArrowTarget } {
+  if (/EXECUTION_STARTED/.test(eventType)) {
+    return { source: 'client', target: 'sf:code' };
+  }
+  if (/EXECUTION_FINISHED/.test(eventType)) {
+    return { source: 'sf:code', target: 'client' };
+  }
+  if (/CALLOUT_REQUEST/.test(eventType)) {
+    const sfSys = getSFSubsystem(eventType);
+    return { source: `sf:${sfSys}`, target: 'external' }; // target filled at render time
+  }
+  if (/CALLOUT_RESPONSE/.test(eventType)) {
+    return { source: 'external', target: 'sf:code' }; // source filled at render time
+  }
+  // Self-messages on a Salesforce subsystem
+  const sfSys = getSFSubsystem(eventType);
+  return { source: `sf:${sfSys}`, target: `sf:${sfSys}` };
 }
 
 // Short labels for event types
@@ -135,15 +203,9 @@ function shortLabel(e: LogEvent): string {
 
 // Color for event type
 function eventColor(eventType: string): string {
-  if (/SOQL|SOSL/.test(eventType)) return '#60a5fa';
-  if (/DML/.test(eventType)) return '#4ecdc4';
-  if (/CALLOUT/.test(eventType)) return '#fb923c';
-  if (/EXCEPTION|FATAL|ERROR/.test(eventType)) return '#ff6b6b';
-  if (/TRIGGER/.test(eventType)) return '#f472b6';
-  if (/FLOW/.test(eventType)) return '#c084fc';
-  if (/USER_DEBUG/.test(eventType)) return '#ffd93d';
-  if (/EXECUTION/.test(eventType)) return '#6c8cff';
-  if (/CODE_UNIT|METHOD|CONSTRUCTOR/.test(eventType)) return '#8b90a0';
+  const sfSys = getSFSubsystem(eventType);
+  const subsys = SF_SUBSYSTEMS.find((s) => s.id === sfSys);
+  if (subsys && sfSys !== 'other') return subsys.color;
   return '#8b90a0';
 }
 
@@ -160,18 +222,28 @@ function participantLabel(log: LoadedLog): string {
   return 'Client';
 }
 
+/** Participant metadata for layout and rendering */
+interface Participant {
+  id: string; // "client", "sf:code", "external:endpoint"
+  label: string;
+  color: string;
+  x: number; // computed layout position
+  isSFSubsystem?: boolean;
+}
+
 // ── Layout types ──
 interface DiagramMessage {
   event: LogEvent;
   y: number;
   label: string;
   color: string;
-  direction: ArrowDir;
+  sourceParticipant: string; // participant ID
+  targetParticipant: string; // participant ID
+  calloutEndpoint?: string; // for callout requests/responses
   isError: boolean;
   sourceLogId: string;
   sourceLogName: string;
   sourceColor: string;
-  calloutEndpoint?: string;
   asyncType?: 'future' | 'queueable' | null;
 }
 
@@ -192,17 +264,66 @@ interface ParSection {
 // ── Layout constants ──
 const HEADER_HEIGHT = 60;
 const CLIENT_X = 140;
-const SERVER_X = 430;
-const ENDPOINT_START_X = 680;
+const SF_START_X = 280; // First Salesforce subsystem column
+const SF_COLUMN_WIDTH = 140; // Width allocated to each SF subsystem column
+const ENDPOINT_START_X = 1200; // External services start after all SF subsystems
 const ENDPOINT_SPACING = 200;
 const MSG_HEIGHT = 32;
 const MSG_GAP = 4;
 const LEFT_MARGIN = 60;
-const BASE_DIAGRAM_WIDTH = 900;
+const BASE_DIAGRAM_WIDTH = 1400;
 const PAR_PADDING = 12;
 const PAR_LABEL_HEIGHT = 22;
 const SECTION_DIVIDER_HEIGHT = 20;
 const ACTIVATION_WIDTH = 12;
+
+/** Build participant map from active events */
+function buildParticipantMap(events: LogEvent[]): Map<string, Participant> {
+  const map = new Map<string, Participant>();
+  
+  // Client participant
+  map.set('client', { id: 'client', label: 'Client', color: '#6c8cff', x: CLIENT_X });
+  
+  // Collect active SF subsystems
+  const activeSFSystems = new Set<string>();
+  const externalEndpoints = new Set<string>();
+  for (const e of events) {
+    const sfSys = getSFSubsystem(e.eventType);
+    if (sfSys !== 'other') activeSFSystems.add(sfSys);
+    if (e.eventType === 'CALLOUT_REQUEST') {
+      externalEndpoints.add(extractCalloutEndpoint(e.detail));
+    }
+  }
+  
+  // Create SF subsystem participants
+  let sfX = SF_START_X;
+  for (const sys of SF_SUBSYSTEMS) {
+    if (activeSFSystems.has(sys.id)) {
+      map.set(`sf:${sys.id}`, {
+        id: `sf:${sys.id}`,
+        label: sys.label,
+        color: sys.color,
+        x: sfX,
+        isSFSubsystem: true,
+      });
+      sfX += SF_COLUMN_WIDTH;
+    }
+  }
+  
+  // Create external endpoint participants
+  let epX = ENDPOINT_START_X;
+  for (const ep of externalEndpoints) {
+    map.set(`external:${ep}`, {
+      id: `external:${ep}`,
+      label: ep,
+      color: '#fb923c',
+      x: epX,
+    });
+    epX += ENDPOINT_SPACING;
+  }
+  
+  return map;
+}
 
 /** Group consecutive events that share the same timestamp (within tolerance) */
 function groupEventsByTimestamp(filtered: LogEvent[]): LogEvent[][] {
@@ -231,26 +352,35 @@ function layoutMessages(
   const messages: DiagramMessage[] = [];
   let y = startY;
   for (const e of logEvents) {
-    const direction = getArrowDirection(e.eventType);
+    const route = getArrowRoute(e.eventType);
     let calloutEndpoint: string | undefined;
-    if (direction === 'server-to-external') {
+    let sourceParticipant = route.source;
+    let targetParticipant = route.target;
+    
+    if (/CALLOUT_REQUEST/.test(e.eventType)) {
       calloutEndpoint = extractCalloutEndpoint(e.detail);
       calloutState.lastEndpoint = calloutEndpoint;
-    } else if (direction === 'external-to-server') {
-      // Use the endpoint from the preceding CALLOUT_REQUEST
+      const sfSys = getSFSubsystem(e.eventType);
+      sourceParticipant = `sf:${sfSys}`;
+      targetParticipant = `external:${calloutEndpoint}`;
+    } else if (/CALLOUT_RESPONSE/.test(e.eventType)) {
       calloutEndpoint = calloutState.lastEndpoint || extractCalloutEndpoint(e.detail);
+      sourceParticipant = `external:${calloutEndpoint}`;
+      targetParticipant = `sf:code`; // responses come back to code
     }
+    
     messages.push({
       event: e,
       y,
       label: shortLabel(e),
       color: eventColor(e.eventType),
-      direction,
+      sourceParticipant,
+      targetParticipant,
+      calloutEndpoint,
       isError: e.level === 'ERROR' || e.level === 'FATAL',
       sourceLogId: e.sourceLogId || '',
       sourceLogName: e.sourceLogName || '',
       sourceColor: e.sourceColor || '#6c8cff',
-      calloutEndpoint,
       asyncType: isAsyncDispatch(e),
     });
     y += MSG_HEIGHT + MSG_GAP;
@@ -300,20 +430,27 @@ function layoutParFragment(
   return y;
 }
 
-/** Compute activation bars per log spanning first to last message */
+/** Compute activation bars for each log on each SF subsystem it touches */
 function computeActivationBars(
   msgs: DiagramMessage[],
-): { yStart: number; yEnd: number; color: string }[] {
-  const byLog = new Map<string, { yStart: number; yEnd: number; color: string }>();
-  for (const m of msgs) {
-    const existing = byLog.get(m.sourceLogId);
-    if (existing) {
-      existing.yEnd = Math.max(existing.yEnd, m.y);
-    } else {
-      byLog.set(m.sourceLogId, { yStart: m.y, yEnd: m.y, color: m.sourceColor });
+): { participantId: string; yStart: number; yEnd: number; color: string }[] {
+  type ActivationKey = `${string}|${string}`; // "logId|participantId"
+  const bars = new Map<ActivationKey, { yStart: number; yEnd: number; color: string; participantId: string }>();
+  
+  for (const msg of msgs) {
+    // Track activations on the source participant if it's a SF subsystem
+    if (msg.sourceParticipant.startsWith('sf:')) {
+      const key: ActivationKey = `${msg.sourceLogId}|${msg.sourceParticipant}`;
+      const existing = bars.get(key);
+      if (existing) {
+        existing.yEnd = Math.max(existing.yEnd, msg.y);
+      } else {
+        bars.set(key, { yStart: msg.y, yEnd: msg.y, color: msg.sourceColor, participantId: msg.sourceParticipant });
+      }
     }
   }
-  return [...byLog.values()];
+  
+  return [...bars.values()];
 }
 
 interface ArrowOpts {
@@ -359,59 +496,62 @@ function renderArrowBetween(opts: ArrowOpts) {
   );
 }
 
-/** Render an arrow based on direction */
-function renderArrow(msg: DiagramMessage, arrowY: number, isHovered: boolean, endpointXMap: Map<string, number>) {
+/** Render an arrow based on source and target participants */
+function renderArrow(
+  msg: DiagramMessage,
+  arrowY: number,
+  isHovered: boolean,
+  participants: Map<string, Participant>,
+) {
+  const sourceParticipant = participants.get(msg.sourceParticipant);
+  const targetParticipant = participants.get(msg.targetParticipant);
+  if (!sourceParticipant || !targetParticipant) return null;
+
   const color = msg.isError ? '#ff6b6b' : msg.color;
   const opacity = isHovered ? 1 : 0.7;
   const strokeW = isHovered ? 1.8 : 1.2;
-  const labelMaxLen = endpointXMap.size > 0 ? 45 : 65;
-  const truncLabel = msg.label.length > labelMaxLen
-    ? msg.label.substring(0, labelMaxLen - 3) + '...'
+  const truncLabel = msg.label.length > 50
+    ? msg.label.substring(0, 47) + '...'
     : msg.label;
 
-  if (msg.direction === 'client-to-server') {
-    return renderArrowBetween({ fromX: CLIENT_X, toX: SERVER_X, arrowY, color, opacity, strokeW, label: truncLabel, dashed: false });
+  // Self-message (on same participant)
+  if (msg.sourceParticipant === msg.targetParticipant) {
+    const loopWidth = 60;
+    const loopHeight = 14;
+    const arrowSize = 7;
+    const x = sourceParticipant.x;
+    return (
+      <g>
+        <polyline
+          points={`${x},${arrowY - loopHeight / 2} ${x + loopWidth},${arrowY - loopHeight / 2} ${x + loopWidth},${arrowY + loopHeight / 2} ${x + arrowSize},${arrowY + loopHeight / 2}`}
+          fill="none" stroke={color} strokeWidth={strokeW} opacity={opacity}
+        />
+        <polygon
+          points={`${x},${arrowY + loopHeight / 2} ${x + arrowSize},${arrowY + loopHeight / 2 - arrowSize / 2} ${x + arrowSize},${arrowY + loopHeight / 2 + arrowSize / 2}`}
+          fill={color} opacity={opacity}
+        />
+        <text
+          x={x + loopWidth + 6} y={arrowY + 3}
+          fill={color} fontSize={9} fontWeight={500} fontFamily="system-ui" opacity={opacity}
+        >
+          {truncLabel}
+        </text>
+      </g>
+    );
   }
 
-  if (msg.direction === 'server-to-client') {
-    return renderArrowBetween({ fromX: SERVER_X, toX: CLIENT_X, arrowY, color, opacity, strokeW, label: truncLabel, dashed: true });
-  }
-
-  if (msg.direction === 'server-to-external') {
-    const extX = (msg.calloutEndpoint && endpointXMap.get(msg.calloutEndpoint)) || ENDPOINT_START_X;
-    return renderArrowBetween({ fromX: SERVER_X, toX: extX, arrowY, color, opacity, strokeW, label: truncLabel, dashed: false });
-  }
-
-  if (msg.direction === 'external-to-server') {
-    const extX = (msg.calloutEndpoint && endpointXMap.get(msg.calloutEndpoint)) || ENDPOINT_START_X;
-    return renderArrowBetween({ fromX: extX, toX: SERVER_X, arrowY, color, opacity, strokeW, label: truncLabel, dashed: true });
-  }
-
-  // self-server: loop on the server lifeline
-  const loopWidth = 60;
-  const loopHeight = 14;
-  const arrowSize = 7;
-  return (
-    <g>
-      <polyline
-        points={`${SERVER_X},${arrowY - loopHeight / 2} ${SERVER_X + loopWidth},${arrowY - loopHeight / 2} ${SERVER_X + loopWidth},${arrowY + loopHeight / 2} ${SERVER_X + arrowSize},${arrowY + loopHeight / 2}`}
-        fill="none" stroke={color} strokeWidth={strokeW} opacity={opacity}
-      />
-      <polygon
-        points={`${SERVER_X},${arrowY + loopHeight / 2} ${SERVER_X + arrowSize},${arrowY + loopHeight / 2 - arrowSize / 2} ${SERVER_X + arrowSize},${arrowY + loopHeight / 2 + arrowSize / 2}`}
-        fill={color} opacity={opacity}
-      />
-      <text
-        x={SERVER_X + loopWidth + 6} y={arrowY + 3}
-        fill={color} fontSize={9} fontWeight={500} fontFamily="system-ui" opacity={opacity}
-      >
-        {truncLabel}
-      </text>
-    </g>
-  );
+  // Message between participants
+  return renderArrowBetween({
+    fromX: sourceParticipant.x,
+    toX: targetParticipant.x,
+    arrowY,
+    color,
+    opacity,
+    strokeW,
+    label: truncLabel,
+    dashed: msg.targetParticipant.startsWith('client') || /RESPONSE|external-to/.test(msg.event.eventType),
+  });
 }
-
-// ── Main component ──
 
 export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -434,44 +574,33 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
     return best;
   }, [selectedLogs]);
 
-  // Collect unique callout endpoints from CALLOUT_REQUEST events only
-  // (responses inherit the endpoint from their preceding request)
-  const calloutEndpoints = useMemo(() => {
-    const endpoints = new Set<string>();
-    for (const e of events) {
-      if (e.eventType === 'CALLOUT_REQUEST') {
-        endpoints.add(extractCalloutEndpoint(e.detail));
-      }
-    }
-    return [...endpoints];
-  }, [events]);
-
-  // Map each endpoint to its X position
-  const endpointXMap = useMemo(() => {
-    const map = new Map<string, number>();
-    calloutEndpoints.forEach((ep, i) => {
-      map.set(ep, ENDPOINT_START_X + i * ENDPOINT_SPACING);
-    });
-    return map;
-  }, [calloutEndpoints]);
-
-  // Dynamic diagram width based on number of endpoints
-  const diagramWidth = useMemo(() => {
-    if (calloutEndpoints.length === 0) return BASE_DIAGRAM_WIDTH;
-    const lastX = ENDPOINT_START_X + (calloutEndpoints.length - 1) * ENDPOINT_SPACING;
-    return Math.max(BASE_DIAGRAM_WIDTH, lastX + 120);
-  }, [calloutEndpoints]);
-
   // Build diagram layout
-  const { messages, parFragments, totalHeight } = useMemo(() => {
+  const { messages, participants, parFragments, totalHeight, diagramWidth, activationBars } = useMemo(() => {
     const filtered = (filter === 'significant'
       ? events.filter((e) => SIGNIFICANT_EVENTS.has(e.eventType))
       : events
     );
 
     if (filtered.length === 0 || selectedLogs.length === 0) {
-      return { messages: [] as DiagramMessage[], parFragments: [] as ParFragment[], totalHeight: HEADER_HEIGHT + 100 };
+      return {
+        messages: [] as DiagramMessage[],
+        participants: new Map<string, Participant>(),
+        parFragments: [] as ParFragment[],
+        totalHeight: HEADER_HEIGHT + 100,
+        diagramWidth: BASE_DIAGRAM_WIDTH,
+        activationBars: [] as { participantId: string; yStart: number; yEnd: number; color: string }[],
+      };
     }
+
+    // Build participant map
+    const participants = buildParticipantMap(filtered);
+    
+    // Compute diagram width based on rightmost participant
+    let maxX = CLIENT_X;
+    for (const p of participants.values()) {
+      maxX = Math.max(maxX, p.x + 100);
+    }
+    const diagramWidth = Math.max(BASE_DIAGRAM_WIDTH, maxX + 120);
 
     const allMessages: DiagramMessage[] = [];
     const fragments: ParFragment[] = [];
@@ -496,7 +625,15 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
       }
     }
 
-    return { messages: allMessages, parFragments: fragments, totalHeight: currentY + 40 };
+    const activationBars = computeActivationBars(allMessages);
+    return {
+      messages: allMessages,
+      participants,
+      parFragments: fragments,
+      totalHeight: currentY + 40,
+      diagramWidth,
+      activationBars,
+    };
   }, [events, filter, selectedLogs]);
 
   // Zoom controls
@@ -538,7 +675,6 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
     );
   }
 
-  const activationBars = computeActivationBars(messages);
   const baseTimestamp = messages.length > 0 ? messages[0].event.absoluteTimestamp : 0;
 
   return (
@@ -577,71 +713,43 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
         >
           <rect width={diagramWidth} height={totalHeight} fill="var(--bg)" />
 
-          {/* ── Participant: Client ── */}
-          <rect x={CLIENT_X - 60} y={8} width={120} height={40} rx={6}
-            fill="#6c8cff" fillOpacity={0.15} stroke="#6c8cff" strokeWidth={1.5}
-          />
-          <text x={CLIENT_X} y={32} textAnchor="middle" fill="#6c8cff"
-            fontSize={12} fontWeight={600} fontFamily="system-ui"
-          >
-            {clientLabel}
-          </text>
-          <line x1={CLIENT_X} y1={HEADER_HEIGHT} x2={CLIENT_X} y2={totalHeight}
-            stroke="#6c8cff" strokeWidth={1} strokeDasharray="6 4" opacity={0.3}
-          />
-
-          {/* ── Participant: Salesforce (Server) ── */}
-          <rect x={SERVER_X - 60} y={8} width={120} height={40} rx={6}
-            fill="#4ecdc4" fillOpacity={0.15} stroke="#4ecdc4" strokeWidth={1.5}
-          />
-          <text x={SERVER_X} y={32} textAnchor="middle" fill="#4ecdc4"
-            fontSize={12} fontWeight={600} fontFamily="system-ui"
-          >
-            Salesforce
-          </text>
-          <line x1={SERVER_X} y1={HEADER_HEIGHT} x2={SERVER_X} y2={totalHeight}
-            stroke="#4ecdc4" strokeWidth={1} strokeDasharray="6 4" opacity={0.3}
-          />
-
-          {/* ── Participant: External Service endpoints ── */}
-          {calloutEndpoints.map((ep) => {
-            const epX = endpointXMap.get(ep) || ENDPOINT_START_X;
-            const displayLabel = ep.length > 20 ? ep.substring(0, 17) + '...' : ep;
+          {/* ── Participants ── */}
+          {Array.from(participants.values()).map((p) => {
+            const displayLabel = p.label.length > 20 ? p.label.substring(0, 17) + '...' : p.label;
             return (
-              <g key={`participant-${ep}`}>
-                <rect x={epX - 70} y={8} width={140} height={40} rx={6}
-                  fill="#fb923c" fillOpacity={0.15} stroke="#fb923c" strokeWidth={1.5}
+              <g key={`participant-${p.id}`}>
+                <rect x={p.x - 60} y={8} width={120} height={40} rx={6}
+                  fill={p.color} fillOpacity={0.15} stroke={p.color} strokeWidth={1.5}
                 />
-                <text x={epX} y={26} textAnchor="middle" fill="#fb923c"
-                  fontSize={10} fontWeight={600} fontFamily="system-ui"
+                <text x={p.x} y={32} textAnchor="middle" fill={p.color}
+                  fontSize={12} fontWeight={600} fontFamily="system-ui"
                 >
-                  {displayLabel}
+                  {p.id === 'client' ? clientLabel : displayLabel}
                 </text>
-                <text x={epX} y={40} textAnchor="middle" fill="#fb923c"
-                  fontSize={8} fontFamily="system-ui" opacity={0.6}
-                >
-                  External
-                </text>
-                <line x1={epX} y1={HEADER_HEIGHT} x2={epX} y2={totalHeight}
-                  stroke="#fb923c" strokeWidth={1} strokeDasharray="6 4" opacity={0.3}
+                <line x1={p.x} y1={HEADER_HEIGHT} x2={p.x} y2={totalHeight}
+                  stroke={p.color} strokeWidth={1} strokeDasharray="6 4" opacity={0.3}
                 />
               </g>
             );
           })}
 
-          {/* ── Activation bars on server lifeline ── */}
-          {activationBars.map((bar) => (
-            <rect
-              key={`act-${bar.yStart}-${bar.yEnd}`}
-              x={SERVER_X - ACTIVATION_WIDTH / 2}
-              y={bar.yStart - 4}
-              width={ACTIVATION_WIDTH}
-              height={bar.yEnd - bar.yStart + MSG_HEIGHT}
-              rx={2}
-              fill={bar.color} fillOpacity={0.12}
-              stroke={bar.color} strokeWidth={0.8} strokeOpacity={0.4}
-            />
-          ))}
+          {/* ── Activation bars ── */}
+          {activationBars.map((bar) => {
+            const participant = participants.get(bar.participantId);
+            if (!participant) return null;
+            return (
+              <rect
+                key={`act-${bar.participantId}-${bar.yStart}-${bar.yEnd}`}
+                x={participant.x - ACTIVATION_WIDTH / 2}
+                y={bar.yStart - 4}
+                width={ACTIVATION_WIDTH}
+                height={bar.yEnd - bar.yStart + MSG_HEIGHT}
+                rx={2}
+                fill={bar.color} fillOpacity={0.12}
+                stroke={bar.color} strokeWidth={0.8} strokeOpacity={0.4}
+              />
+            );
+          })}
 
           {/* ── Par fragments ── */}
           {parFragments.map((frag) => (
@@ -701,18 +809,17 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
                 onClick={() => onSelectEvent(msg.event)}
                 style={{ cursor: 'pointer' }}
               >
-                {renderArrow(msg, arrowY, isHovered, endpointXMap)}
+                {renderArrow(msg, arrowY, isHovered, participants)}
 
                 {/* Async dispatch badge */}
                 {msg.asyncType && (() => {
                   const asyncColor = msg.asyncType === 'future' ? '#fb923c' : '#c084fc';
                   const asyncLabel = msg.asyncType === 'future' ? '⚡ future' : '⚡ queueable';
                   const badgeWidth = msg.asyncType === 'future' ? 52 : 70;
-                  const badgeX = msg.direction === 'self-server'
-                    ? SERVER_X + 68
-                    : msg.direction === 'client-to-server'
-                      ? (CLIENT_X + SERVER_X) / 2
-                      : (CLIENT_X + SERVER_X) / 2;
+                  const sourceParticipant = participants.get(msg.sourceParticipant);
+                  const targetParticipant = participants.get(msg.targetParticipant);
+                  if (!sourceParticipant || !targetParticipant) return null;
+                  const badgeX = (sourceParticipant.x + targetParticipant.x) / 2;
                   const badgeY = arrowY + 6;
                   return (
                     <g>
@@ -735,7 +842,7 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
 
                 {/* Relative elapsed time */}
                 {(() => {
-                  const timeText = formatRelativeMs(msg.event.absoluteTimestamp - baseTimestamp);
+                  const timeText = `+${Math.round(msg.event.absoluteTimestamp - baseTimestamp)} ms`;
                   const textWidth = timeText.length * 5.6 + 8;
                   return (
                     <>
