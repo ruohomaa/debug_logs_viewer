@@ -708,8 +708,62 @@ function renderArrow(
 export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const lastMousePos = useRef({ x: 0, y: 0 });
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const [filter, setFilter] = useState<'all' | 'significant'>('significant');
+
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    // Simple pan on wheel if not ctrl key
+    if (!e.ctrlKey && !e.metaKey) {
+      setPan(prev => ({ x: prev.x - e.deltaX, y: prev.y - e.deltaY }));
+      return;
+    }
+
+    // Zoom on ctrl + wheel
+    e.preventDefault();
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    // Calculate mouse position relative to content
+    const contentX = (mouseX - pan.x) / zoom;
+    const contentY = (mouseY - pan.y) / zoom;
+
+    const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+    const newZoom = Math.min(Math.max(zoom * zoomFactor, 0.1), 5);
+
+    // Calculate new pan to keep mouse position stable
+    const newPanX = mouseX - contentX * newZoom;
+    const newPanY = mouseY - contentY * newZoom;
+
+    setZoom(newZoom);
+    setPan({ x: newPanX, y: newPanY });
+  }, [zoom, pan]);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    // Only drag on left click and if not clicking a button/interactive element
+    if (e.button === 0) {
+      setIsPanning(true);
+      lastMousePos.current = { x: e.clientX, y: e.clientY };
+    }
+  }, []);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (isPanning) {
+      const dx = e.clientX - lastMousePos.current.x;
+      const dy = e.clientY - lastMousePos.current.y;
+      setPan(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+      lastMousePos.current = { x: e.clientX, y: e.clientY };
+    }
+  }, [isPanning]);
+
+  const handleMouseUp = useCallback(() => {
+    setIsPanning(false);
+  }, []);
 
   const selectedLogs = useMemo(() => logs.filter((l) => l.selected), [logs]);
 
@@ -834,9 +888,9 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
   }, [events, filter, selectedLogs]);
 
   // Zoom controls
-  const handleZoomIn = useCallback(() => setZoom((z) => Math.min(z + 0.25, 3)), []);
-  const handleZoomOut = useCallback(() => setZoom((z) => Math.max(z - 0.25, 0.25)), []);
-  const handleZoomReset = useCallback(() => setZoom(1), []);
+  const handleZoomIn = useCallback(() => setZoom((z) => Math.min(z + 0.25, 5)), []);
+  const handleZoomOut = useCallback(() => setZoom((z) => Math.max(z - 0.25, 0.1)), []);
+  const handleZoomReset = useCallback(() => { setZoom(1); setPan({ x: 0, y: 0 }); }, []);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -901,13 +955,18 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
       </div>
 
       {/* Diagram */}
-      <div ref={containerRef} className="flex-1 overflow-auto">
-        <svg
-          width={diagramWidth * zoom}
-          height={totalHeight * zoom}
-          viewBox={`0 0 ${diagramWidth} ${totalHeight}`}
-          style={{ minWidth: '100%' }}
-        >
+      <div 
+        ref={containerRef} 
+        className="flex-1 overflow-hidden select-none"
+        style={{ cursor: isPanning ? 'grabbing' : 'grab' }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+        onWheel={handleWheel}
+      >
+        <svg width="100%" height="100%">
+          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
           <rect width={diagramWidth} height={totalHeight} fill="var(--bg)" />
 
           {/* ── Participants ── */}
@@ -1087,6 +1146,7 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
               </g>
             );
           })}
+          </g>
         </svg>
       </div>
     </div>
