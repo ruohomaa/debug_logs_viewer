@@ -33,10 +33,10 @@ function relativeTime(iso: string): string {
 
 export default function LogListPanel({
   logs,
-  selectedIds,
-  onToggle,
+  // selectedIds,
+  // onToggle,
   onSelectGroup,
-  onFetchAndCombine,
+  // onFetchAndCombine,
   loadingBody,
   groupByRequest,
   onToggleGrouping,

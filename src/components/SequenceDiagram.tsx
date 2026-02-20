@@ -8,12 +8,14 @@ interface Props {
   readonly onSelectEvent: (event: LogEvent) => void;
 }
 
+
 // ── Salesforce subsystem participants ──
 interface SFSubsystem {
   id: string;
   label: string;
   color: string;
   eventMatcher: (event: LogEvent) => boolean;
+  isDynamic?: boolean;
 }
 
 const SF_SUBSYSTEMS: SFSubsystem[] = [
@@ -23,12 +25,7 @@ const SF_SUBSYSTEMS: SFSubsystem[] = [
     color: '#0ea5e9',
     eventMatcher: (e) => /AuraDefinitionBundle|LightningController|ComponentController/i.test(e.detail) || /AURA/.test(e.eventType),
   },
-  {
-    id: 'code',
-    label: 'Code',
-    color: '#8b90a0',
-    eventMatcher: (e) => /CODE_UNIT|METHOD_ENTRY|METHOD_EXIT|CONSTRUCTOR/.test(e.eventType),
-  },
+  // 'code' subsystem removed in favor of dynamic participants
   {
     id: 'soql',
     label: 'SOQL',
@@ -47,12 +44,7 @@ const SF_SUBSYSTEMS: SFSubsystem[] = [
     color: '#c084fc',
     eventMatcher: (e) => /FLOW/.test(e.eventType),
   },
-  {
-    id: 'trigger',
-    label: 'Trigger',
-    color: '#f472b6',
-    eventMatcher: (e) => /TRIGGER/.test(e.eventType),
-  },
+  // Trigger is also dynamic now usually, but we keep it if not caught by stack
   {
     id: 'validation',
     label: 'Validation',
@@ -123,45 +115,39 @@ function extractCalloutEndpoint(detail: string): string {
   return 'External Service';
 }
 
-/** Arrow source and target: either "client", "sf:<subsystem>", or "external:<endpoint>" */
-type ArrowSource = string; // "client" or "sf:code" etc
-type ArrowTarget = string; // "sf:code" or "external:endpoint" etc
-
-function getArrowRoute(event: LogEvent): { source: ArrowSource; target: ArrowTarget } {
-  const { eventType } = event;
-  if (/EXECUTION_STARTED/.test(eventType)) {
-    return { source: 'client', target: 'sf:code' };
+/** Extract a participant name from a start event */
+function extractParticipantName(event: LogEvent): string | null {
+  if (event.eventType === 'CODE_UNIT_STARTED') {
+    // e.g. "CODE_UNIT_STARTED|[EXTERNAL]|01q...|Description"
+    // or "CODE_UNIT_STARTED|[EXTERNAL]|trigger:AccountTrigger on Account trigger event BeforeInsert|__sfdc_trigger/AccountTrigger"
+    // Usually the last part is the name or description.
+    const parts = event.detail.split('|');
+    const name = parts.at(-1) || event.detail;
+    // Clean up
+    return name.replace(/^__sfdc_trigger\//, '');
   }
-  if (/EXECUTION_FINISHED/.test(eventType)) {
-    return { source: 'sf:code', target: 'client' };
+  if (event.eventType === 'METHOD_ENTRY' || event.eventType === 'CONSTRUCTOR_ENTRY') {
+    // e.g. "METHOD_ENTRY|[1]|01p...|Class.Method"
+    const parts = event.detail.split('|');
+    const name = parts.at(-1) || event.detail;
+    return name;
   }
-  if (/CALLOUT_REQUEST/.test(eventType)) {
-    const sfSys = getSFSubsystem(event);
-    return { source: `sf:${sfSys}`, target: 'external' }; // target filled at render time
-  }
-  if (/CALLOUT_RESPONSE/.test(eventType)) {
-    return { source: 'external', target: 'sf:code' }; // source filled at render time
-  }
-  // Self-messages on a Salesforce subsystem
-  const sfSys = getSFSubsystem(event);
-  return { source: `sf:${sfSys}`, target: `sf:${sfSys}` };
+  return null;
 }
 
 // Short labels for event types
 function shortLabel(e: LogEvent): string {
+  if (e.eventType === 'CODE_UNIT_STARTED' || e.eventType === 'METHOD_ENTRY' || e.eventType === 'CONSTRUCTOR_ENTRY') {
+    const name = extractParticipantName(e);
+    return name ? `${name}()` : e.eventType;
+  }
+  
   const d = e.detail.split('\n')[0];
   switch (e.eventType) {
-    case 'CODE_UNIT_STARTED':
-    case 'CODE_UNIT_FINISHED': {
-      const parts = d.split('|');
-      const name = parts.at(-1) || d;
-      return name.length > 60 ? name.substring(0, 57) + '...' : name;
-    }
-    case 'METHOD_ENTRY':
-    case 'METHOD_EXIT': {
-      const parts = d.split('|');
-      return parts.at(-1) || d;
-    }
+    case 'CODE_UNIT_FINISHED':
+    case 'METHOD_EXIT': 
+    case 'CONSTRUCTOR_EXIT':
+      return ''; // No label on return arrows usually
     case 'DML_BEGIN':
     case 'DML_END':
       return `DML: ${d.split('|').slice(1).join(' ').substring(0, 50)}`;
@@ -270,7 +256,6 @@ interface ParSection {
 // ── Layout constants ──
 const HEADER_HEIGHT = 60;
 const CLIENT_X = 140;
-const SF_START_X = 280; // First Salesforce subsystem column
 const SF_COLUMN_WIDTH = 140; // Width allocated to each SF subsystem column
 const ENDPOINT_START_X = 1200; // External services start after all SF subsystems
 const ENDPOINT_SPACING = 200;
@@ -281,43 +266,162 @@ const BASE_DIAGRAM_WIDTH = 1400;
 const PAR_PADDING = 12;
 const PAR_LABEL_HEIGHT = 22;
 const SECTION_DIVIDER_HEIGHT = 20;
+
+interface LayoutContext {
+  selectedLogs: LoadedLog[];
+  allMessages: DiagramMessage[];
+  fragments: ParFragment[];
+  calloutState: { lastEndpoint?: string };
+  soqlQueries: Map<string, string> | undefined;
+  eventRoutes: Map<LogEvent, { source: string; target: string }>;
+}
+
 const ACTIVATION_WIDTH = 12;
 
+/** 
+ * Build dynamic call stack and participant map.
+ * Returns:
+ * - routes: Map of event -> { source, target }
+ * - participants: Map of participantId -> Participant info
+ */
+function analyzeCallStack(events: LogEvent[]): {
+  routes: Map<LogEvent, { source: string; target: string }>;
+  participants: Map<string, Participant>;
+} {
+  const routes = new Map<LogEvent, { source: string; target: string }>();
+  const participants = new Map<string, Participant>();
+  
+  // Per-log stack state
+  const logStacks = new Map<string, string[]>(); // logId -> stack of participant IDs
+
+  // Ensure "client" exists
+  participants.set('client', { id: 'client', label: 'Client', color: '#6c8cff', x: CLIENT_X });
+
+  // Process events in chronological order (assuming they are sorted)
+  for (const e of events) {
+    const logId = e.sourceLogId || 'main';
+    if (!logStacks.has(logId)) {
+      logStacks.set(logId, ['client']);
+    }
+    const stack = logStacks.get(logId)!;
+    const currentParticipant = stack[stack.length - 1];
+
+    // Determine if this event starts/ends a new context
+    if (e.eventType === 'CODE_UNIT_STARTED' || e.eventType === 'METHOD_ENTRY' || e.eventType === 'CONSTRUCTOR_ENTRY') {
+      const name = extractParticipantName(e);
+      if (name) {
+        const participantId = `dynamic:${name}`;
+        
+        // Register participant if new
+        if (!participants.has(participantId)) {
+          participants.set(participantId, {
+            id: participantId,
+            label: name,
+            color: e.eventType === 'CODE_UNIT_STARTED' ? '#f472b6' : '#8b90a0', // Pink for triggers/units, Grey for methods
+            x: 0, // Placeholder, will layout later
+          });
+        }
+        
+        // Route: Caller -> New Participant
+        routes.set(e, { source: currentParticipant, target: participantId });
+        
+        // Push to stack
+        stack.push(participantId);
+        continue;
+      }
+    } else if (e.eventType === 'CODE_UNIT_FINISHED' || e.eventType === 'METHOD_EXIT' || e.eventType === 'CONSTRUCTOR_EXIT') {
+       // Pop from stack
+       // Ideally we check if it matches the top, but for now just pop
+       if (stack.length > 1) { // Don't pop client
+         const finishedParticipant = stack.pop()!;
+         const returnTo = stack[stack.length - 1];
+         routes.set(e, { source: finishedParticipant, target: returnTo });
+         continue;
+       }
+    }
+
+    // Default routing (System events, Debug, etc)
+    // If it's a known system event, route accordingly
+    const sfSys = getSFSubsystem(e);
+    if (sfSys !== 'other' && !['code', 'trigger'].includes(sfSys)) {
+         // It's a system event like DML or SOQL
+         // Current participant calls System
+         const sysId = `sf:${sfSys}`;
+         // We treat this as a self-contained call usually? 
+         // Or as "Event on current participant"?
+         // Current logic says:
+         // DML_BEGIN: ? -> ?
+         // If we want DML to have a column: Current -> DML
+         routes.set(e, { source: currentParticipant, target: sysId });
+         continue;
+    }
+
+    // Regular event (DEBUG, etc) on the current participant
+    routes.set(e, { source: currentParticipant, target: currentParticipant });
+  }
+
+  return { routes, participants };
+}
+
 /** Build participant map from active events */
-function buildParticipantMap(events: LogEvent[]): Map<string, Participant> {
+function buildParticipantMap(
+  events: LogEvent[], 
+  dynamicParticipants: Map<string, Participant>
+): Map<string, Participant> {
   const map = new Map<string, Participant>();
   
-  // Client participant
-  map.set('client', { id: 'client', label: 'Client', color: '#6c8cff', x: CLIENT_X });
+  // Start with Client (already in dynamicParticipants usually, but ensure order)
+  map.set('client', dynamicParticipants.get('client')!);
+
+  // Collect active SF subsystems (excluding code/trigger if we want dynamic only)
+  // Actually, we want to mix dynamic participants with fixed system ones?
+  // Let's take ALL dynamic participants first, then add active system ones.
   
-  // Collect active SF subsystems
+  // Actually, better to just merge.
+  // We need to determine X positions.
+  
+  let currentX = CLIENT_X + SF_COLUMN_WIDTH; // Start after Client
+
+  // Add all dynamic code/method participants
+  for (const [id, p] of dynamicParticipants) {
+    if (id === 'client') continue;
+    // Update X
+    map.set(id, { ...p, x: currentX });
+    currentX += SF_COLUMN_WIDTH;
+  }
+
+  // Add system participants if used and not already covered?
   const activeSFSystems = new Set<string>();
-  const externalEndpoints = new Set<string>();
   for (const e of events) {
     const sfSys = getSFSubsystem(e);
-    if (sfSys !== 'other') activeSFSystems.add(sfSys);
-    if (e.eventType === 'CALLOUT_REQUEST') {
-      externalEndpoints.add(extractCalloutEndpoint(e.detail));
+    if (sfSys !== 'other' && !['code', 'trigger'].includes(sfSys)) {
+        activeSFSystems.add(sfSys);
     }
   }
-  
-  // Create SF subsystem participants
-  let sfX = SF_START_X;
+
+  // Create SF subsystem participants (DML, SOQL, etc)
   for (const sys of SF_SUBSYSTEMS) {
     if (activeSFSystems.has(sys.id)) {
       map.set(`sf:${sys.id}`, {
         id: `sf:${sys.id}`,
         label: sys.label,
         color: sys.color,
-        x: sfX,
+        x: currentX,
         isSFSubsystem: true,
       });
-      sfX += SF_COLUMN_WIDTH;
+      currentX += SF_COLUMN_WIDTH;
     }
   }
   
   // Create external endpoint participants
-  let epX = ENDPOINT_START_X;
+  const externalEndpoints = new Set<string>();
+  for (const e of events) {
+      if (e.eventType === 'CALLOUT_REQUEST') {
+          externalEndpoints.add(extractCalloutEndpoint(e.detail));
+      }
+  }
+
+  let epX = Math.max(ENDPOINT_START_X, currentX + 50);
   for (const ep of externalEndpoints) {
     map.set(`external:${ep}`, {
       id: `external:${ep}`,
@@ -354,12 +458,30 @@ function layoutMessages(
   logEvents: LogEvent[],
   startY: number,
   calloutState: { lastEndpoint?: string },
-  soqlQueries?: Map<string, string>,
+  soqlQueries: Map<string, string> | undefined,
+  eventRoutes: Map<LogEvent, { source: string; target: string }>,
 ): { messages: DiagramMessage[]; endY: number } {
   const messages: DiagramMessage[] = [];
   let y = startY;
   for (const e of logEvents) {
-    const route = getArrowRoute(e);
+    // Unique key for event lookup in routes - simple ref check if same obj, otherwise need ID
+    // We can use a WeakMap if we pass objects, or Map<LogEvent, ...>
+    // Just using the event object as key in a Map work fine if references are stable.
+    // However, here we passed `eventRoutes` as Map<string, ...>. Let's use Map<LogEvent, ...>
+    
+    // Fallback route if not in stack
+    let route = eventRoutes.get(e);
+    if (!route) {
+      // Fallback: simple default routing
+      const sfSys = getSFSubsystem(e);
+      if (sfSys !== 'other') {
+        route = { source: `sf:${sfSys}`, target: `sf:${sfSys}` };
+      } else {
+        // Default to client
+        route = { source: 'client', target: 'client' };
+      }
+    }
+    
     let calloutEndpoint: string | undefined;
     let sourceParticipant = route.source;
     let targetParticipant = route.target;
@@ -418,12 +540,8 @@ function layoutMessages(
 /** Lay out a par fragment with sections per log */
 function layoutParFragment(
   byLog: Map<string, LogEvent[]>,
-  selectedLogs: LoadedLog[],
   currentY: number,
-  allMessages: DiagramMessage[],
-  fragments: ParFragment[],
-  calloutState: { lastEndpoint?: string },
-  soqlQueries?: Map<string, string>,
+  ctx: LayoutContext,
 ): number {
   const fragYStart = currentY;
   let y = currentY + PAR_LABEL_HEIGHT;
@@ -431,7 +549,7 @@ function layoutParFragment(
   let sectionIdx = 0;
 
   for (const [logId, logEvents] of byLog) {
-    const log = selectedLogs.find((l) => l.id === logId);
+    const log = ctx.selectedLogs.find((l) => l.id === logId);
     if (!log) continue;
 
     if (sectionIdx > 0) {
@@ -439,8 +557,14 @@ function layoutParFragment(
     }
 
     const sectionYStart = y - (sectionIdx > 0 ? SECTION_DIVIDER_HEIGHT : 0);
-    const { messages: sectionMsgs, endY } = layoutMessages(logEvents, y, calloutState, soqlQueries);
-    allMessages.push(...sectionMsgs);
+    const { messages: sectionMsgs, endY } = layoutMessages(
+      logEvents, 
+      y, 
+      ctx.calloutState, 
+      ctx.soqlQueries, 
+      ctx.eventRoutes
+    );
+    ctx.allMessages.push(...sectionMsgs);
     y = endY;
 
     sections.push({
@@ -454,7 +578,7 @@ function layoutParFragment(
   }
 
   y += PAR_PADDING;
-  fragments.push({ yStart: fragYStart, yEnd: y, sections });
+  ctx.fragments.push({ yStart: fragYStart, yEnd: y, sections });
   return y;
 }
 
@@ -643,7 +767,11 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
     }
 
     // Build participant map
-    const participants = buildParticipantMap(filtered);
+    // First, analyze dynamic participants and call stack
+    const { routes: eventRoutes, participants: dynamicParticipants } = analyzeCallStack(filtered);
+
+    // Merge into full participant map
+    const participants = buildParticipantMap(filtered, dynamicParticipants);
     
     // Compute diagram width based on rightmost participant
     let maxX = CLIENT_X;
@@ -658,6 +786,15 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
     const groups = groupEventsByTimestamp(filtered);
     const calloutState: { lastEndpoint?: string } = {};
 
+    const layoutCtx: LayoutContext = {
+      selectedLogs,
+      allMessages,
+      fragments,
+      calloutState,
+      soqlQueries,
+      eventRoutes
+    };
+
     for (const group of groups) {
       const byLog = new Map<string, LogEvent[]>();
       for (const e of group) {
@@ -667,9 +804,19 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
       }
 
       if (byLog.size > 1) {
-        currentY = layoutParFragment(byLog, selectedLogs, currentY, allMessages, fragments, calloutState, soqlQueries);
+        currentY = layoutParFragment(
+          byLog,
+          currentY,
+          layoutCtx
+        );
       } else {
-        const { messages: seqMsgs, endY } = layoutMessages(group, currentY, calloutState, soqlQueries);
+        const { messages: seqMsgs, endY } = layoutMessages(
+          group, 
+          currentY, 
+          calloutState, 
+          soqlQueries,
+          eventRoutes
+        );
         allMessages.push(...seqMsgs);
         currentY = endY;
       }
