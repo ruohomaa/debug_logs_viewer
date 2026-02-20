@@ -1,73 +1,85 @@
-# React + TypeScript + Vite
+# Salesforce Debug Log Viewer
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A modern, interactive tool for visualizing and analyzing Salesforce Apex debug logs. This application provides a rich user interface to explore logs with timeline views, sequence diagrams, and hierarchical tree structures.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+### Org Connection
+- **Automatic Detection**: Automatically detects Salesforce orgs authenticated via the Salesforce CLI (`sf`).
+- **One-Click Connect**: Connect to any authenticated org to list and download logs.
 
-## React Compiler
+### Log Management
+- **List Logs**: View available `ApexLog` records from the connected org.
+- **Filter & Search**: Quickly find logs by user, operation, status, etc.
+- **Download**: Fetch and parse raw log bodies.
+- **Drag & Drop**: Analyze local `.log` files by dragging them onto the window.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Visualization Modes
+- **Timeline View**: Visual representation of execution time and event duration.
+- **Sequence Diagram**: Generates a UML sequence diagram to visualize call stacks and interactions.
+- **Tree View**: Hierarchical collapse/expand view of the execution stack.
+- **Event List**: Detailed chronological list of log events.
 
-## Expanding the ESLint configuration
+### Analysis Tools
+- **Category Filtering**: Filter events by category (e.g., `Apex_Code`, `SOQL_Execute`, `Callout`) to reduce noise.
+- **Search**: Full-text search within log events for specific variable names or error messages.
+- **Detail Panel**: Inspect deep properties of selected events.
+- **Performance Stats**: View total duration, event counts, and other metrics.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Prerequisites
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+Before running the application, ensure you have the following installed:
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+1.  **Node.js** (v18 or higher)
+2.  **Salesforce CLI (`sf`)**
+    -   Install via `npm install -g @salesforce/cli` or the [official installer](https://developer.salesforce.com/tools/salesforcecli).
+    -   Authenticate to your target orgs using `sf org login web` (or other auth methods).
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Installation
+
+1.  Clone the repository:
+    ```bash
+    git clone <repository_url>
+    cd debug_logs_viewer
+    ```
+
+2.  Install dependencies:
+    ```bash
+    npm install
+    ```
+
+## Running the Application
+
+Start both the backend server and frontend client with a single command:
+
+```bash
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+This will launch:
+-   **Backend Server** (Express) on `http://localhost:3001` - Handles Salesforce CLI interactions.
+-   **Frontend Client** (Vite/React) commonly on `http://localhost:5173`.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Usage Guide
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+1.  **Connect to an Org**:
+    -   On the left sidebar, click "Connect" next to the desired Salesforce organization.
+    -   The app uses your local `sf` CLI configuration to authenticate.
+
+2.  **Load Logs**:
+    -   Once connected, recent debug logs appear in the "Available Logs" section.
+    -   Click a log to download and parse it.
+    -   **Tip**: Drag and drop a raw `.log` file into the window to view it without connecting to an org.
+
+3.  **Explore Data**:
+    -   Use the **Toolbar** buttons to toggle views:
+        -   **List**: Standard chronological view.
+        -   **Tree**: Nested call stack view.
+        -   **Diagram**: Sequence diagram of method calls.
+    -   **Filter**: Use the search bar to find text.
+    -   **Categories**: Toggle categories on the right sidebar to hide irrelevent events (e.g., hidden `SYSTEM_METHOD_ENTRY`).
+
+## Troubleshooting
+
+-   **Failed to list orgs**: Ensure `sf` is in your system PATH and you can run `sf org list` in your terminal.
+-   **Connection Failed**: The local server uses the `sf` CLI to obtain an access token. Ensure your session is valid by running `sf org display -o <alias>` in your terminal.
