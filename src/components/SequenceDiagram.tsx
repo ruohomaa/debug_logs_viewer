@@ -13,57 +13,51 @@ interface SFSubsystem {
   id: string;
   label: string;
   color: string;
-  eventMatcher: (eventType: string) => boolean;
+  eventMatcher: (event: LogEvent) => boolean;
 }
 
 const SF_SUBSYSTEMS: SFSubsystem[] = [
   {
+    id: 'aura',
+    label: 'Aura/LWC',
+    color: '#0ea5e9',
+    eventMatcher: (e) => /AuraDefinitionBundle|LightningController|ComponentController/i.test(e.detail) || /AURA/.test(e.eventType),
+  },
+  {
     id: 'code',
     label: 'Code',
     color: '#8b90a0',
-    eventMatcher: (et) => /CODE_UNIT|METHOD_ENTRY|METHOD_EXIT|CONSTRUCTOR/.test(et),
+    eventMatcher: (e) => /CODE_UNIT|METHOD_ENTRY|METHOD_EXIT|CONSTRUCTOR/.test(e.eventType),
   },
   {
     id: 'soql',
     label: 'SOQL',
     color: '#60a5fa',
-    eventMatcher: (et) => /SOQL|SOSL/.test(et),
+    eventMatcher: (e) => /SOQL|SOSL/.test(e.eventType),
   },
   {
     id: 'dml',
     label: 'DML',
     color: '#4ecdc4',
-    eventMatcher: (et) => /DML/.test(et),
+    eventMatcher: (e) => /DML/.test(e.eventType),
   },
   {
     id: 'flow',
     label: 'Flow',
     color: '#c084fc',
-    eventMatcher: (et) => /FLOW/.test(et),
+    eventMatcher: (e) => /FLOW/.test(e.eventType),
   },
   {
     id: 'trigger',
     label: 'Trigger',
     color: '#f472b6',
-    eventMatcher: (et) => /TRIGGER/.test(et),
+    eventMatcher: (e) => /TRIGGER/.test(e.eventType),
   },
   {
     id: 'validation',
     label: 'Validation',
     color: '#fbbf24',
-    eventMatcher: (et) => /VALIDATION/.test(et),
-  },
-  {
-    id: 'debug',
-    label: 'Debug',
-    color: '#ffd93d',
-    eventMatcher: (et) => et === 'USER_DEBUG',
-  },
-  {
-    id: 'error',
-    label: 'Error',
-    color: '#ff6b6b',
-    eventMatcher: (et) => /EXCEPTION|FATAL|ERROR/.test(et),
+    eventMatcher: (e) => /VALIDATION/.test(e.eventType),
   },
 ];
 
@@ -77,9 +71,9 @@ const SIGNIFICANT_EVENTS = new Set([
   'CONSTRUCTOR_EXIT',
   'DML_BEGIN',
   'DML_END',
-  'SOQL_EXECUTE_BEGIN',
+  // 'SOQL_EXECUTE_BEGIN', // Too noisy, showing END with row count instead
   'SOQL_EXECUTE_END',
-  'SOSL_EXECUTE_BEGIN',
+  // 'SOSL_EXECUTE_BEGIN', // Too noisy
   'SOSL_EXECUTE_END',
   'CALLOUT_REQUEST',
   'CALLOUT_RESPONSE',
@@ -95,7 +89,7 @@ const SIGNIFICANT_EVENTS = new Set([
   'EXCEPTION_THROWN',
   'FATAL_ERROR',
   'VALIDATION_RULE',
-  'VALIDATION_FORMULA',
+  // 'VALIDATION_FORMULA', // Too noisy
   'VF_PAGE_MESSAGE',
   'LIMIT_USAGE_FOR_NS',
 ]);
@@ -103,9 +97,9 @@ const SIGNIFICANT_EVENTS = new Set([
 const PARALLEL_TOLERANCE_MS = 1;
 
 /** Determine which SF subsystem an event belongs to */
-function getSFSubsystem(eventType: string): string {
+function getSFSubsystem(event: LogEvent): string {
   for (const sys of SF_SUBSYSTEMS) {
-    if (sys.eventMatcher(eventType)) return sys.id;
+    if (sys.eventMatcher(event)) return sys.id;
   }
   return 'other';
 }
@@ -133,7 +127,8 @@ function extractCalloutEndpoint(detail: string): string {
 type ArrowSource = string; // "client" or "sf:code" etc
 type ArrowTarget = string; // "sf:code" or "external:endpoint" etc
 
-function getArrowRoute(eventType: string): { source: ArrowSource; target: ArrowTarget } {
+function getArrowRoute(event: LogEvent): { source: ArrowSource; target: ArrowTarget } {
+  const { eventType } = event;
   if (/EXECUTION_STARTED/.test(eventType)) {
     return { source: 'client', target: 'sf:code' };
   }
@@ -141,14 +136,14 @@ function getArrowRoute(eventType: string): { source: ArrowSource; target: ArrowT
     return { source: 'sf:code', target: 'client' };
   }
   if (/CALLOUT_REQUEST/.test(eventType)) {
-    const sfSys = getSFSubsystem(eventType);
+    const sfSys = getSFSubsystem(event);
     return { source: `sf:${sfSys}`, target: 'external' }; // target filled at render time
   }
   if (/CALLOUT_RESPONSE/.test(eventType)) {
     return { source: 'external', target: 'sf:code' }; // source filled at render time
   }
   // Self-messages on a Salesforce subsystem
-  const sfSys = getSFSubsystem(eventType);
+  const sfSys = getSFSubsystem(event);
   return { source: `sf:${sfSys}`, target: `sf:${sfSys}` };
 }
 
@@ -170,14 +165,25 @@ function shortLabel(e: LogEvent): string {
     case 'DML_BEGIN':
     case 'DML_END':
       return `DML: ${d.split('|').slice(1).join(' ').substring(0, 50)}`;
-    case 'SOQL_EXECUTE_BEGIN':
-    case 'SOQL_EXECUTE_END':
-      return `SOQL: ${d.substring(0, 55)}`;
+    case 'SOQL_EXECUTE_END': {
+      // Format: [Elem]|Rows:X
+      const match = /Rows:(\d+)/.exec(d);
+      return match ? `SOQL: ${match[1]} rows` : 'SOQL Query';
+    }
+    case 'SOSL_EXECUTE_END': {
+      const match = /Rows:(\d+)/.exec(d);
+      return match ? `SOSL: ${match[1]} rows` : 'SOSL Query';
+    }
     case 'USER_DEBUG':
       return `DEBUG: ${d.split('|').pop()?.substring(0, 50) || d.substring(0, 50)}`;
     case 'EXCEPTION_THROWN':
     case 'FATAL_ERROR':
       return d.substring(0, 60);
+    case 'VALIDATION_RULE': {
+      // Format: ID|RuleName
+      const parts = d.split('|');
+      return parts.length > 1 ? parts[1].substring(0, 50) : d.substring(0, 50);
+    }
     case 'CALLOUT_REQUEST': {
       const endpoint = extractCalloutEndpoint(d);
       // Try to extract HTTP method
@@ -202,8 +208,8 @@ function shortLabel(e: LogEvent): string {
 }
 
 // Color for event type
-function eventColor(eventType: string): string {
-  const sfSys = getSFSubsystem(eventType);
+function eventColor(event: LogEvent): string {
+  const sfSys = getSFSubsystem(event);
   const subsys = SF_SUBSYSTEMS.find((s) => s.id === sfSys);
   if (subsys && sfSys !== 'other') return subsys.color;
   return '#8b90a0';
@@ -288,7 +294,7 @@ function buildParticipantMap(events: LogEvent[]): Map<string, Participant> {
   const activeSFSystems = new Set<string>();
   const externalEndpoints = new Set<string>();
   for (const e of events) {
-    const sfSys = getSFSubsystem(e.eventType);
+    const sfSys = getSFSubsystem(e);
     if (sfSys !== 'other') activeSFSystems.add(sfSys);
     if (e.eventType === 'CALLOUT_REQUEST') {
       externalEndpoints.add(extractCalloutEndpoint(e.detail));
@@ -348,11 +354,12 @@ function layoutMessages(
   logEvents: LogEvent[],
   startY: number,
   calloutState: { lastEndpoint?: string },
+  soqlQueries?: Map<string, string>,
 ): { messages: DiagramMessage[]; endY: number } {
   const messages: DiagramMessage[] = [];
   let y = startY;
   for (const e of logEvents) {
-    const route = getArrowRoute(e.eventType);
+    const route = getArrowRoute(e);
     let calloutEndpoint: string | undefined;
     let sourceParticipant = route.source;
     let targetParticipant = route.target;
@@ -360,7 +367,7 @@ function layoutMessages(
     if (/CALLOUT_REQUEST/.test(e.eventType)) {
       calloutEndpoint = extractCalloutEndpoint(e.detail);
       calloutState.lastEndpoint = calloutEndpoint;
-      const sfSys = getSFSubsystem(e.eventType);
+      const sfSys = getSFSubsystem(e);
       sourceParticipant = `sf:${sfSys}`;
       targetParticipant = `external:${calloutEndpoint}`;
     } else if (/CALLOUT_RESPONSE/.test(e.eventType)) {
@@ -368,12 +375,32 @@ function layoutMessages(
       sourceParticipant = `external:${calloutEndpoint}`;
       targetParticipant = `sf:code`; // responses come back to code
     }
+
+    let label = shortLabel(e);
+    if (e.eventType === 'SOQL_EXECUTE_END' && soqlQueries) {
+      const lid = e.sourceLogId || '';
+      const query = soqlQueries.get(`${lid}:${e.lineNum}`);
+      if (query) {
+        // Extract rows
+        const match = /Rows:(\d+)/.exec(e.detail);
+        const rows = match ? match[1] : '?';
+        // Extract clean query
+        // typically "SOQL_EXECUTE_BEGIN|Aggregations:0|SELECT ..."
+        let cleanQuery = query;
+        if (cleanQuery.includes('|SELECT')) {
+            cleanQuery = cleanQuery.substring(cleanQuery.indexOf('|SELECT') + 1);
+        } else if (cleanQuery.includes('SELECT')) {
+            cleanQuery = cleanQuery.substring(cleanQuery.indexOf('SELECT'));
+        }
+        label = `SOQL: ${rows} rows - ${cleanQuery}`;
+      }
+    }
     
     messages.push({
       event: e,
       y,
-      label: shortLabel(e),
-      color: eventColor(e.eventType),
+      label,
+      color: eventColor(e),
       sourceParticipant,
       targetParticipant,
       calloutEndpoint,
@@ -396,6 +423,7 @@ function layoutParFragment(
   allMessages: DiagramMessage[],
   fragments: ParFragment[],
   calloutState: { lastEndpoint?: string },
+  soqlQueries?: Map<string, string>,
 ): number {
   const fragYStart = currentY;
   let y = currentY + PAR_LABEL_HEIGHT;
@@ -411,7 +439,7 @@ function layoutParFragment(
     }
 
     const sectionYStart = y - (sectionIdx > 0 ? SECTION_DIVIDER_HEIGHT : 0);
-    const { messages: sectionMsgs, endY } = layoutMessages(logEvents, y, calloutState);
+    const { messages: sectionMsgs, endY } = layoutMessages(logEvents, y, calloutState, soqlQueries);
     allMessages.push(...sectionMsgs);
     y = endY;
 
@@ -576,6 +604,28 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
 
   // Build diagram layout
   const { messages, participants, parFragments, totalHeight, diagramWidth, activationBars } = useMemo(() => {
+    // Pre-scan for SOQL query text
+    const soqlQueries = new Map<string, string>(); // `${logId}:${endLineNum}` -> queryText
+    const lastSoqlBegin = new Map<string, string>(); // logId -> queryText
+
+    // Iterate sorted events to map SOQL BEGIN to END
+    // We assume events are sorted by time/line.
+    // If multiple logs, events are interleaved by time. But we track per logId.
+    for (const e of events) {
+      const lid = e.sourceLogId || '';
+      if (e.eventType === 'SOQL_EXECUTE_BEGIN') {
+        const d = e.detail;
+        const query = d.substring(d.indexOf('Aggregations:') + 13) || d; // Extract query if messy
+        lastSoqlBegin.set(lid, query);
+      } else if (e.eventType === 'SOQL_EXECUTE_END') {
+        const query = lastSoqlBegin.get(lid);
+        if (query) {
+          soqlQueries.set(`${lid}:${e.lineNum}`, query);
+          lastSoqlBegin.delete(lid); // clear after use (assuming no nesting)
+        }
+      }
+    }
+
     const filtered = (filter === 'significant'
       ? events.filter((e) => SIGNIFICANT_EVENTS.has(e.eventType))
       : events
@@ -617,9 +667,9 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
       }
 
       if (byLog.size > 1) {
-        currentY = layoutParFragment(byLog, selectedLogs, currentY, allMessages, fragments, calloutState);
+        currentY = layoutParFragment(byLog, selectedLogs, currentY, allMessages, fragments, calloutState, soqlQueries);
       } else {
-        const { messages: seqMsgs, endY } = layoutMessages(group, currentY, calloutState);
+        const { messages: seqMsgs, endY } = layoutMessages(group, currentY, calloutState, soqlQueries);
         allMessages.push(...seqMsgs);
         currentY = endY;
       }
