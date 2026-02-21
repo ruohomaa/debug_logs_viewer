@@ -23,7 +23,7 @@ const SF_SUBSYSTEMS: SFSubsystem[] = [
     id: 'aura',
     label: 'Aura/LWC',
     color: '#0ea5e9',
-    eventMatcher: (e) => /AuraDefinitionBundle|LightningController|ComponentController/i.test(e.detail) || /AURA/.test(e.eventType),
+    eventMatcher: (e) => /AuraDefinitionBundle|LightningController|ComponentController/i.test(e.detail) || /AURA/.test(e.eventType) || /apex:\/\/.*\/ACTION\$/.test(e.detail),
   },
   // 'code' subsystem removed in favor of dynamic participants
   {
@@ -59,6 +59,8 @@ const SIGNIFICANT_EVENTS = new Set([
   'CODE_UNIT_FINISHED',
   'METHOD_ENTRY',
   'METHOD_EXIT',
+  'SYSTEM_METHOD_ENTRY',
+  'SYSTEM_METHOD_EXIT',
   'CONSTRUCTOR_ENTRY',
   'CONSTRUCTOR_EXIT',
   'DML_BEGIN',
@@ -87,6 +89,22 @@ const SIGNIFICANT_EVENTS = new Set([
 ]);
 
 const PARALLEL_TOLERANCE_MS = 1;
+
+/** Determine if an event is a system method (no record ID) */
+function isSystemMethod(event: LogEvent): boolean {
+  if (event.eventType === 'SYSTEM_METHOD_ENTRY' || event.eventType === 'SYSTEM_METHOD_EXIT') {
+    return true;
+  }
+  if (event.eventType === 'METHOD_ENTRY' || event.eventType === 'METHOD_EXIT') {
+    const parts = event.detail.split('|');
+    // Format: [Line]|RecordId|MethodName
+    // If RecordId is empty, it's a system method
+    if (parts.length >= 3 && !parts[1]) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /** Determine which SF subsystem an event belongs to */
 function getSFSubsystem(event: LogEvent): string {
@@ -126,7 +144,7 @@ function extractParticipantName(event: LogEvent): string | null {
     // Clean up
     return name.replace(/^__sfdc_trigger\//, '');
   }
-  if (event.eventType === 'METHOD_ENTRY' || event.eventType === 'CONSTRUCTOR_ENTRY') {
+  if (event.eventType === 'METHOD_ENTRY' || event.eventType === 'CONSTRUCTOR_ENTRY' || event.eventType === 'SYSTEM_METHOD_ENTRY') {
     // e.g. "METHOD_ENTRY|[1]|01p...|Class.Method"
     const parts = event.detail.split('|');
     const name = parts.at(-1) || event.detail;
@@ -137,7 +155,7 @@ function extractParticipantName(event: LogEvent): string | null {
 
 // Short labels for event types
 function shortLabel(e: LogEvent): string {
-  if (e.eventType === 'CODE_UNIT_STARTED' || e.eventType === 'METHOD_ENTRY' || e.eventType === 'CONSTRUCTOR_ENTRY') {
+  if (e.eventType === 'CODE_UNIT_STARTED' || e.eventType === 'METHOD_ENTRY' || e.eventType === 'CONSTRUCTOR_ENTRY' || e.eventType === 'SYSTEM_METHOD_ENTRY') {
     const name = extractParticipantName(e);
     return name ? `${name}()` : e.eventType;
   }
@@ -146,6 +164,7 @@ function shortLabel(e: LogEvent): string {
   switch (e.eventType) {
     case 'CODE_UNIT_FINISHED':
     case 'METHOD_EXIT': 
+    case 'SYSTEM_METHOD_EXIT':
     case 'CONSTRUCTOR_EXIT':
       return ''; // No label on return arrows usually
     case 'DML_BEGIN':
@@ -218,22 +237,9 @@ function eventColor(event: LogEvent): string {
   return '#8b90a0';
 }
 
-// Determine participant label from the log Operation field
-function participantLabel(log: LoadedLog): string {
-  const op = log.apexLog?.Operation || log.name;
-  if (/\bAPI\b/i.test(op)) return 'API';
-  if (/\bBatch\b/i.test(op)) return 'Batch Apex';
-  if (/\bSchedule/i.test(op)) return 'Scheduled Apex';
-  if (/\bFuture\b/i.test(op)) return 'Future';
-  if (/\bQueueable\b/i.test(op)) return 'Queueable';
-  if (/\bVF\b|Visualforce/i.test(op)) return 'Visualforce';
-  if (/\bLightning\b|Aura|LWC/i.test(op)) return 'Lightning';
-  return 'Client';
-}
-
 /** Participant metadata for layout and rendering */
 interface Participant {
-  id: string; // "client", "sf:code", "external:endpoint"
+  id: string; // "sf:code", "external:endpoint"
   label: string;
   color: string;
   x: number; // computed layout position
@@ -310,20 +316,17 @@ function analyzeCallStack(events: LogEvent[]): {
   // Per-log stack state
   const logStacks = new Map<string, string[]>(); // logId -> stack of participant IDs
 
-  // Ensure "client" exists
-  participants.set('client', { id: 'client', label: 'Client', color: '#6c8cff', x: CLIENT_X });
-
   // Process events in chronological order (assuming they are sorted)
   for (const e of events) {
     const logId = e.sourceLogId || 'main';
     if (!logStacks.has(logId)) {
-      logStacks.set(logId, ['client']);
+      logStacks.set(logId, []);
     }
     const stack = logStacks.get(logId)!;
-    const currentParticipant = stack[stack.length - 1];
+    const currentParticipant = stack.length > 0 ? stack[stack.length - 1] : null;
 
     // Determine if this event starts/ends a new context
-    if (e.eventType === 'CODE_UNIT_STARTED' || e.eventType === 'METHOD_ENTRY' || e.eventType === 'CONSTRUCTOR_ENTRY') {
+    if (e.eventType === 'CODE_UNIT_STARTED' || e.eventType === 'METHOD_ENTRY' || e.eventType === 'CONSTRUCTOR_ENTRY' || e.eventType === 'SYSTEM_METHOD_ENTRY') {
       const name = extractParticipantName(e);
       if (name) {
         const participantId = `dynamic:${name}`;
@@ -338,19 +341,29 @@ function analyzeCallStack(events: LogEvent[]): {
           });
         }
         
+        let source = currentParticipant;
+        if (!source || (e.eventType === 'CODE_UNIT_STARTED' && getSFSubsystem(e) === 'aura')) {
+          source = 'sf:aura';
+        }
+
         // Route: Caller -> New Participant
-        routes.set(e, { source: currentParticipant, target: participantId });
+        routes.set(e, { source, target: participantId });
         
         // Push to stack
         stack.push(participantId);
         continue;
       }
-    } else if (e.eventType === 'CODE_UNIT_FINISHED' || e.eventType === 'METHOD_EXIT' || e.eventType === 'CONSTRUCTOR_EXIT') {
+    } else if (e.eventType === 'CODE_UNIT_FINISHED' || e.eventType === 'METHOD_EXIT' || e.eventType === 'CONSTRUCTOR_EXIT' || e.eventType === 'SYSTEM_METHOD_EXIT') {
        // Pop from stack
        // Ideally we check if it matches the top, but for now just pop
-       if (stack.length > 1) { // Don't pop client
+       if (stack.length > 0) {
          const finishedParticipant = stack.pop()!;
-         const returnTo = stack[stack.length - 1];
+         let returnTo = stack.length > 0 ? stack[stack.length - 1] : 'sf:aura';
+         
+         if (finishedParticipant.includes('apex://') && finishedParticipant.includes('/ACTION$')) {
+           returnTo = 'sf:aura';
+         }
+
          routes.set(e, { source: finishedParticipant, target: returnTo });
          continue;
        }
@@ -363,15 +376,15 @@ function analyzeCallStack(events: LogEvent[]): {
          // It's a system event like DML or SOQL
          const sysId = `sf:${sfSys}`;
          if (e.eventType.endsWith('_END') || e.eventType.endsWith('_FINISHED')) {
-             routes.set(e, { source: sysId, target: currentParticipant });
+             routes.set(e, { source: sysId, target: currentParticipant || 'sf:aura' });
          } else {
-             routes.set(e, { source: currentParticipant, target: sysId });
+             routes.set(e, { source: currentParticipant || 'sf:aura', target: sysId });
          }
          continue;
     }
 
     // Regular event (DEBUG, etc) on the current participant
-    routes.set(e, { source: currentParticipant, target: currentParticipant });
+    routes.set(e, { source: currentParticipant || 'sf:aura', target: currentParticipant || 'sf:aura' });
   }
 
   return { routes, participants };
@@ -384,25 +397,7 @@ function buildParticipantMap(
 ): Map<string, Participant> {
   const map = new Map<string, Participant>();
   
-  // Start with Client (already in dynamicParticipants usually, but ensure order)
-  map.set('client', dynamicParticipants.get('client')!);
-
-  // Collect active SF subsystems (excluding code/trigger if we want dynamic only)
-  // Actually, we want to mix dynamic participants with fixed system ones?
-  // Let's take ALL dynamic participants first, then add active system ones.
-  
-  // Actually, better to just merge.
-  // We need to determine X positions.
-  
-  let currentX = CLIENT_X + SF_COLUMN_WIDTH; // Start after Client
-
-  // Add all dynamic code/method participants
-  for (const [id, p] of dynamicParticipants) {
-    if (id === 'client') continue;
-    // Update X
-    map.set(id, { ...p, x: currentX });
-    currentX += SF_COLUMN_WIDTH;
-  }
+  let currentX = CLIENT_X;
 
   // Add system participants if used and not already covered?
   const activeSFSystems = new Set<string>();
@@ -413,7 +408,28 @@ function buildParticipantMap(
     }
   }
 
-  // Create SF subsystem participants (DML, SOQL, etc)
+  // If aura is active, it should be the first participant (leftmost)
+  if (activeSFSystems.has('aura')) {
+    const auraSys = SF_SUBSYSTEMS.find(s => s.id === 'aura')!;
+    map.set('sf:aura', {
+      id: 'sf:aura',
+      label: auraSys.label,
+      color: auraSys.color,
+      x: currentX,
+      isSFSubsystem: true,
+    });
+    currentX += SF_COLUMN_WIDTH;
+    activeSFSystems.delete('aura');
+  }
+
+  // Add all dynamic code/method participants
+  for (const [id, p] of dynamicParticipants) {
+    // Update X
+    map.set(id, { ...p, x: currentX });
+    currentX += SF_COLUMN_WIDTH;
+  }
+
+  // Create remaining SF subsystem participants (DML, SOQL, etc)
   for (const sys of SF_SUBSYSTEMS) {
     if (activeSFSystems.has(sys.id)) {
       map.set(`sf:${sys.id}`, {
@@ -490,8 +506,8 @@ function layoutMessages(
       if (sfSys !== 'other') {
         route = { source: `sf:${sfSys}`, target: `sf:${sfSys}` };
       } else {
-        // Default to client
-        route = { source: 'client', target: 'client' };
+        // Default to aura
+        route = { source: 'sf:aura', target: 'sf:aura' };
       }
     }
     
@@ -695,7 +711,7 @@ function renderArrow(
     opacity,
     strokeW,
     label: truncLabel,
-    dashed: msg.targetParticipant.startsWith('client') || /RESPONSE|external-to/.test(msg.event.eventType) || msg.event.eventType.endsWith('_END') || msg.event.eventType.endsWith('_FINISHED') || msg.event.eventType.endsWith('_EXIT'),
+    dashed: /RESPONSE|external-to/.test(msg.event.eventType) || msg.event.eventType.endsWith('_END') || msg.event.eventType.endsWith('_FINISHED') || msg.event.eventType.endsWith('_EXIT'),
   });
 }
 
@@ -707,6 +723,7 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
   const lastMousePos = useRef({ x: 0, y: 0 });
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const [filter, setFilter] = useState<'all' | 'significant'>('significant');
+  const [showSystemMethods, setShowSystemMethods] = useState(false);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     // Simple pan on wheel if not ctrl key
@@ -761,25 +778,16 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
 
   const selectedLogs = useMemo(() => logs.filter((l) => l.selected), [logs]);
 
-  const clientLabel = useMemo(() => {
-    if (selectedLogs.length === 0) return 'Client';
-    const labels = selectedLogs.map(participantLabel);
-    const counts = new Map<string, number>();
-    for (const l of labels) counts.set(l, (counts.get(l) || 0) + 1);
-    let best = labels[0];
-    let bestCount = 0;
-    for (const [label, count] of counts) {
-      if (count > bestCount) { best = label; bestCount = count; }
-    }
-    return best;
-  }, [selectedLogs]);
-
   // Build diagram layout
   const { messages, participants, parFragments, totalHeight, diagramWidth, activationBars } = useMemo(() => {
-    const filtered = (filter === 'significant'
+    let filtered = (filter === 'significant'
       ? events.filter((e) => SIGNIFICANT_EVENTS.has(e.eventType))
       : events
     );
+
+    if (!showSystemMethods) {
+      filtered = filtered.filter((e) => !isSystemMethod(e));
+    }
 
     if (filtered.length === 0 || selectedLogs.length === 0) {
       return {
@@ -855,7 +863,7 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
       diagramWidth,
       activationBars,
     };
-  }, [events, filter, selectedLogs]);
+  }, [events, filter, showSystemMethods, selectedLogs]);
 
   // Zoom controls
   const handleZoomIn = useCallback(() => setZoom((z) => Math.min(z + 0.25, 5)), []);
@@ -912,6 +920,15 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
             <option value="significant">Significant only</option>
             <option value="all">All events</option>
           </select>
+          <label className="flex items-center gap-1.5 text-xs text-[var(--text-dim)] cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showSystemMethods}
+              onChange={(e) => setShowSystemMethods(e.target.checked)}
+              className="cursor-pointer"
+            />
+            Show system methods
+          </label>
           <span className="text-xs text-[var(--text-dim)]">
             {messages.length} events · {parFragments.length} par fragment{parFragments.length === 1 ? '' : 's'}
           </span>
@@ -950,7 +967,7 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
                 <text x={p.x} y={32} textAnchor="middle" fill={p.color}
                   fontSize={12} fontWeight={600} fontFamily="system-ui"
                 >
-                  {p.id === 'client' ? clientLabel : displayLabel}
+                  {displayLabel}
                 </text>
                 <line x1={p.x} y1={HEADER_HEIGHT} x2={p.x} y2={totalHeight}
                   stroke={p.color} strokeWidth={1} strokeDasharray="6 4" opacity={0.3}
