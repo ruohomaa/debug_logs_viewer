@@ -63,9 +63,9 @@ const SIGNIFICANT_EVENTS = new Set([
   'CONSTRUCTOR_EXIT',
   'DML_BEGIN',
   'DML_END',
-  // 'SOQL_EXECUTE_BEGIN', // Too noisy, showing END with row count instead
+  'SOQL_EXECUTE_BEGIN',
   'SOQL_EXECUTE_END',
-  // 'SOSL_EXECUTE_BEGIN', // Too noisy
+  'SOSL_EXECUTE_BEGIN',
   'SOSL_EXECUTE_END',
   'CALLOUT_REQUEST',
   'CALLOUT_RESPONSE',
@@ -149,16 +149,33 @@ function shortLabel(e: LogEvent): string {
     case 'CONSTRUCTOR_EXIT':
       return ''; // No label on return arrows usually
     case 'DML_BEGIN':
-    case 'DML_END':
       return `DML: ${d.split('|').slice(1).join(' ').substring(0, 50)}`;
+    case 'DML_END':
+      return `${d.split('|').slice(1).join(' ').substring(0, 50)}`;
+    case 'SOQL_EXECUTE_BEGIN': {
+      const match = /SELECT[\s\S]*/i.exec(e.detail);
+      if (match) {
+        const query = match[0].replace(/\s+/g, ' ').trim();
+        return `SOQL: ${query.substring(0, 50)}`;
+      }
+      return 'SOQL Query';
+    }
     case 'SOQL_EXECUTE_END': {
       // Format: [Elem]|Rows:X
       const match = /Rows:(\d+)/.exec(d);
-      return match ? `SOQL: ${match[1]} rows` : 'SOQL Query';
+      return match ? `${match[1]} rows` : 'Return';
+    }
+    case 'SOSL_EXECUTE_BEGIN': {
+      const match = /FIND[\s\S]*/i.exec(e.detail);
+      if (match) {
+        const query = match[0].replace(/\s+/g, ' ').trim();
+        return `SOSL: ${query.substring(0, 50)}`;
+      }
+      return 'SOSL Query';
     }
     case 'SOSL_EXECUTE_END': {
       const match = /Rows:(\d+)/.exec(d);
-      return match ? `SOSL: ${match[1]} rows` : 'SOSL Query';
+      return match ? `${match[1]} rows` : 'Return';
     }
     case 'USER_DEBUG':
       return `DEBUG: ${d.split('|').pop()?.substring(0, 50) || d.substring(0, 50)}`;
@@ -272,7 +289,6 @@ interface LayoutContext {
   allMessages: DiagramMessage[];
   fragments: ParFragment[];
   calloutState: { lastEndpoint?: string };
-  soqlQueries: Map<string, string> | undefined;
   eventRoutes: Map<LogEvent, { source: string; target: string }>;
 }
 
@@ -345,14 +361,12 @@ function analyzeCallStack(events: LogEvent[]): {
     const sfSys = getSFSubsystem(e);
     if (sfSys !== 'other' && !['code', 'trigger'].includes(sfSys)) {
          // It's a system event like DML or SOQL
-         // Current participant calls System
          const sysId = `sf:${sfSys}`;
-         // We treat this as a self-contained call usually? 
-         // Or as "Event on current participant"?
-         // Current logic says:
-         // DML_BEGIN: ? -> ?
-         // If we want DML to have a column: Current -> DML
-         routes.set(e, { source: currentParticipant, target: sysId });
+         if (e.eventType.endsWith('_END') || e.eventType.endsWith('_FINISHED')) {
+             routes.set(e, { source: sysId, target: currentParticipant });
+         } else {
+             routes.set(e, { source: currentParticipant, target: sysId });
+         }
          continue;
     }
 
@@ -458,7 +472,6 @@ function layoutMessages(
   logEvents: LogEvent[],
   startY: number,
   calloutState: { lastEndpoint?: string },
-  soqlQueries: Map<string, string> | undefined,
   eventRoutes: Map<LogEvent, { source: string; target: string }>,
 ): { messages: DiagramMessage[]; endY: number } {
   const messages: DiagramMessage[] = [];
@@ -499,24 +512,6 @@ function layoutMessages(
     }
 
     let label = shortLabel(e);
-    if (e.eventType === 'SOQL_EXECUTE_END' && soqlQueries) {
-      const lid = e.sourceLogId || '';
-      const query = soqlQueries.get(`${lid}:${e.lineNum}`);
-      if (query) {
-        // Extract rows
-        const match = /Rows:(\d+)/.exec(e.detail);
-        const rows = match ? match[1] : '?';
-        // Extract clean query
-        // typically "SOQL_EXECUTE_BEGIN|Aggregations:0|SELECT ..."
-        let cleanQuery = query;
-        if (cleanQuery.includes('|SELECT')) {
-            cleanQuery = cleanQuery.substring(cleanQuery.indexOf('|SELECT') + 1);
-        } else if (cleanQuery.includes('SELECT')) {
-            cleanQuery = cleanQuery.substring(cleanQuery.indexOf('SELECT'));
-        }
-        label = `SOQL: ${rows} rows - ${cleanQuery}`;
-      }
-    }
     
     messages.push({
       event: e,
@@ -561,7 +556,6 @@ function layoutParFragment(
       logEvents, 
       y, 
       ctx.calloutState, 
-      ctx.soqlQueries, 
       ctx.eventRoutes
     );
     ctx.allMessages.push(...sectionMsgs);
@@ -701,7 +695,7 @@ function renderArrow(
     opacity,
     strokeW,
     label: truncLabel,
-    dashed: msg.targetParticipant.startsWith('client') || /RESPONSE|external-to/.test(msg.event.eventType),
+    dashed: msg.targetParticipant.startsWith('client') || /RESPONSE|external-to/.test(msg.event.eventType) || msg.event.eventType.endsWith('_END') || msg.event.eventType.endsWith('_FINISHED') || msg.event.eventType.endsWith('_EXIT'),
   });
 }
 
@@ -782,28 +776,6 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
 
   // Build diagram layout
   const { messages, participants, parFragments, totalHeight, diagramWidth, activationBars } = useMemo(() => {
-    // Pre-scan for SOQL query text
-    const soqlQueries = new Map<string, string>(); // `${logId}:${endLineNum}` -> queryText
-    const lastSoqlBegin = new Map<string, string>(); // logId -> queryText
-
-    // Iterate sorted events to map SOQL BEGIN to END
-    // We assume events are sorted by time/line.
-    // If multiple logs, events are interleaved by time. But we track per logId.
-    for (const e of events) {
-      const lid = e.sourceLogId || '';
-      if (e.eventType === 'SOQL_EXECUTE_BEGIN') {
-        const d = e.detail;
-        const query = d.substring(d.indexOf('Aggregations:') + 13) || d; // Extract query if messy
-        lastSoqlBegin.set(lid, query);
-      } else if (e.eventType === 'SOQL_EXECUTE_END') {
-        const query = lastSoqlBegin.get(lid);
-        if (query) {
-          soqlQueries.set(`${lid}:${e.lineNum}`, query);
-          lastSoqlBegin.delete(lid); // clear after use (assuming no nesting)
-        }
-      }
-    }
-
     const filtered = (filter === 'significant'
       ? events.filter((e) => SIGNIFICANT_EVENTS.has(e.eventType))
       : events
@@ -845,7 +817,6 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
       allMessages,
       fragments,
       calloutState,
-      soqlQueries,
       eventRoutes
     };
 
@@ -868,7 +839,6 @@ export default function SequenceDiagram({ events, logs, onSelectEvent }: Props) 
           group, 
           currentY, 
           calloutState, 
-          soqlQueries,
           eventRoutes
         );
         allMessages.push(...seqMsgs);
