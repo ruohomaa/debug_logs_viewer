@@ -10,6 +10,7 @@ interface Props {
   loadingBody: Set<string>;
   groupByRequest: boolean;
   onToggleGrouping: () => void;
+  connId?: string;
 }
 
 function relativeTime(iso: string): string {
@@ -40,6 +41,7 @@ export default function LogListPanel({
   loadingBody,
   groupByRequest,
   onToggleGrouping,
+  connId,
 }: Props) {
   const [search, setSearch] = useState('');
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -228,7 +230,15 @@ export default function LogListPanel({
               <div className="mt-2 pt-2 border-t border-[var(--border)] text-[11px] text-[var(--text-dim)] space-y-1" onClick={(e) => e.stopPropagation()}>
                 <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
                   <span className="text-[var(--text-dim)]">ID</span>
-                  <span className="font-mono text-[var(--text)] select-all truncate">{log.Id}</span>
+                  <span className="font-mono text-[var(--text)] select-all truncate">
+                    {connId ? (
+                      <a href={`/api/open/${connId}/${log.Id}`} target="_blank" rel="noreferrer" className="text-[var(--primary)] hover:underline">
+                        {log.Id}
+                      </a>
+                    ) : (
+                      log.Id
+                    )}
+                  </span>
                   <span className="text-[var(--text-dim)]">User</span>
                   <span className="text-[var(--text)]">{log.LogUser?.Name || 'Unknown'}</span>
                   <span className="text-[var(--text-dim)]">Operation</span>
@@ -246,7 +256,19 @@ export default function LogListPanel({
                   <span className="text-[var(--text-dim)]">Started</span>
                   <span className="text-[var(--text)]">{formatTimestamp(log.StartTime)}</span>
                   <span className="text-[var(--text-dim)]">Request ID</span>
-                  <span className="font-mono text-[var(--text)] truncate select-all">{log.RequestIdentifier || '—'}</span>
+                  <span className="font-mono text-[var(--text)] truncate select-all">
+                    {log.RequestIdentifier ? (
+                      connId ? (
+                        <a href={`/api/open/${connId}/${log.RequestIdentifier}`} target="_blank" rel="noreferrer" className="text-[var(--primary)] hover:underline">
+                          {log.RequestIdentifier}
+                        </a>
+                      ) : (
+                        log.RequestIdentifier
+                      )
+                    ) : (
+                      '—'
+                    )}
+                  </span>
                 </div>
               </div>
             )}

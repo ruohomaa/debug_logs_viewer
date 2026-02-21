@@ -9,11 +9,47 @@ interface Props {
   density: 'default' | 'compact' | 'comfortable';
   onSelectEvent: (event: LogEvent) => void;
   scrollToIndex?: number | null;
+  connId?: string;
 }
 
 const PAGE_SIZE = 400;
 
-export default function EventList({ events, showGaps, density, onSelectEvent, scrollToIndex }: Props) {
+function linkifyText(text: string, connId?: string) {
+  if (!connId) return text;
+
+  const regex = /\b[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?\b/g;
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.substring(lastIndex, match.index));
+    }
+    const id = match[0];
+    parts.push(
+      <a
+        key={match.index}
+        href={`/api/open/${connId}/${id}`}
+        target="_blank"
+        rel="noreferrer"
+        className="text-[var(--primary)] hover:underline"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {id}
+      </a>
+    );
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex));
+  }
+
+  return parts.length > 0 ? parts : text;
+}
+
+export default function EventList({ events, showGaps, density, onSelectEvent, scrollToIndex, connId }: Props) {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const containerRef = useRef<HTMLDivElement>(null);
   const [highlightIndex, setHighlightIndex] = useState<number | null>(null);
@@ -143,7 +179,7 @@ export default function EventList({ events, showGaps, density, onSelectEvent, sc
                       )}
                     </span>
                     <span className="text-[var(--text-dim)] whitespace-nowrap overflow-hidden text-ellipsis">
-                      {e.detail.split('\n')[0].substring(0, 200)}
+                      {linkifyText(e.detail.split('\n')[0].substring(0, 200), connId)}
                     </span>
                   </div>
                 );

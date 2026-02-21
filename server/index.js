@@ -178,6 +178,18 @@ app.delete('/api/logs/:logId', async (req, res) => {
   }
 });
 
+// ── Open record in Salesforce ──
+app.get('/api/open/:connId/:recordId', (req, res) => {
+  const session = sessions.get(req.params.connId);
+  if (!session) {
+    return res.status(401).send('Session expired or invalid');
+  }
+  const { instanceUrl, sessionId } = session;
+  const retUrl = encodeURIComponent(`/${req.params.recordId}`);
+  const url = `${instanceUrl}/secur/frontdoor.jsp?sid=${sessionId}&retURL=${retUrl}`;
+  res.redirect(url);
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });

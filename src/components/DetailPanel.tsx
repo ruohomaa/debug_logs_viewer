@@ -4,6 +4,7 @@ import type { LogEvent } from '../types';
 interface Props {
   readonly event: LogEvent | null;
   readonly onClose: () => void;
+  readonly connId?: string;
 }
 
 /** Parse flow interview limit lines into structured data */
@@ -25,7 +26,42 @@ const FLOW_LIMIT_EVENTS = new Set([
   'FLOW_BULK_ELEMENT_LIMIT_USAGE',
 ]);
 
-export default function DetailPanel({ event, onClose }: Props) {
+function linkifyText(text: string, connId?: string) {
+  if (!connId) return text;
+
+  // Match 15 or 18 character alphanumeric strings that look like Salesforce IDs
+  const regex = /\b[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?\b/g;
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.substring(lastIndex, match.index));
+    }
+    const id = match[0];
+    parts.push(
+      <a
+        key={match.index}
+        href={`/api/open/${connId}/${id}`}
+        target="_blank"
+        rel="noreferrer"
+        className="text-[var(--primary)] hover:underline"
+      >
+        {id}
+      </a>
+    );
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex));
+  }
+
+  return parts.length > 0 ? parts : text;
+}
+
+export default function DetailPanel({ event, onClose, connId }: Props) {
   const isLimitsEvent = FLOW_LIMIT_EVENTS.has(event?.eventType ?? '');
   const limits = useMemo(() => {
     if (!isLimitsEvent || !event) return [];
@@ -152,7 +188,7 @@ export default function DetailPanel({ event, onClose }: Props) {
           </table>
         ) : (
           <pre className="text-xs font-mono whitespace-pre-wrap break-all leading-relaxed text-[var(--text-dim)]">
-            {event.raw}
+            {linkifyText(event.raw, connId)}
           </pre>
         )}
       </div>

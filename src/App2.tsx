@@ -391,6 +391,7 @@ export default function App() {
               loadingBody={loadingBody}
               groupByRequest={groupByRequest}
               onToggleGrouping={() => setGroupByRequest(!groupByRequest)}
+              connId={connection?.connId}
             />
           )}
         </aside>
@@ -641,6 +642,7 @@ export default function App() {
                   density={density}
                   onSelectEvent={setSelectedEvent}
                   scrollToIndex={scrollToEventIndex}
+                  connId={connection?.connId}
                 />
               )}
               {viewMode === 'tree' && (
@@ -648,6 +650,7 @@ export default function App() {
                   events={filteredEvents}
                   density={density}
                   onSelectEvent={setSelectedEvent}
+                  connId={connection?.connId}
                 />
               )}
               {viewMode === 'diagram' && (
@@ -662,7 +665,11 @@ export default function App() {
         </main>
       </div>
 
-      <DetailPanel event={selectedEvent} onClose={() => setSelectedEvent(null)} />
+      <DetailPanel
+        event={selectedEvent}
+        onClose={() => setSelectedEvent(null)}
+        connId={connection?.connId}
+      />
     </div>
   );
 }

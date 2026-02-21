@@ -14,9 +14,45 @@ interface Props {
   events: LogEvent[];
   density: 'default' | 'compact' | 'comfortable';
   onSelectEvent: (event: LogEvent) => void;
+  connId?: string;
 }
 
-export default function TreeView({ events, density, onSelectEvent }: Props) {
+function linkifyText(text: string, connId?: string) {
+  if (!connId) return text;
+
+  const regex = /\b[a-zA-Z0-9]{15}(?:[a-zA-Z0-9]{3})?\b/g;
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.substring(lastIndex, match.index));
+    }
+    const id = match[0];
+    parts.push(
+      <a
+        key={match.index}
+        href={`/api/open/${connId}/${id}`}
+        target="_blank"
+        rel="noreferrer"
+        className="text-[var(--primary)] hover:underline"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {id}
+      </a>
+    );
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex));
+  }
+
+  return parts.length > 0 ? parts : text;
+}
+
+export default function TreeView({ events, density, onSelectEvent, connId }: Props) {
   const [treeFilter, setTreeFilter] = useState('');
   const [expandAll, setExpandAll] = useState<boolean | null>(null);
 
@@ -95,6 +131,7 @@ export default function TreeView({ events, density, onSelectEvent }: Props) {
             fontSize={fontSize}
             startTime={startTime}
             onSelectEvent={onSelectEvent}
+            connId={connId}
           />
         ))}
       </div>
@@ -111,6 +148,7 @@ function TreeNodeRow({
   fontSize,
   startTime,
   onSelectEvent,
+  connId,
 }: {
   node: TreeNode;
   depth: number;
@@ -118,6 +156,7 @@ function TreeNodeRow({
   fontSize: number;
   startTime: number;
   onSelectEvent: (event: LogEvent) => void;
+  connId?: string;
 }) {
   const [expanded, setExpanded] = useState(node.expanded);
   const hasChildren = node.children.length > 0;
@@ -216,7 +255,7 @@ function TreeNodeRow({
           className="text-[var(--text-dim)] truncate ml-2 opacity-60 group-hover:opacity-100 transition-opacity"
           title={event.detail}
         >
-          {abbreviateDetail(event.detail)}
+          {linkifyText(abbreviateDetail(event.detail), connId)}
         </span>
 
         {/* Children count badge */}
@@ -242,9 +281,10 @@ function TreeNodeRow({
             <TreeNodeRow
               key={`${child.event.sourceLogId}-${child.event.lineNum}-${i}`}
               node={child}
-              depth={1}
+              depth={depth + 1}
               paddingY={paddingY}
               fontSize={fontSize}              startTime={startTime}              onSelectEvent={onSelectEvent}
+              connId={connId}
             />
           ))}
         </div>
