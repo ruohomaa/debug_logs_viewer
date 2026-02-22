@@ -9,8 +9,18 @@ interface Props {
 export default function StatsBar({ events, logs }: Props) {
   const selectedLogs = logs.filter((l) => l.selected);
   const timestamps = events.map((e) => e.absoluteTimestamp).filter((t) => t > 0);
-  const minT = timestamps.length ? Math.min(...timestamps) : 0;
-  const maxT = timestamps.length ? Math.max(...timestamps) : 0;
+  
+  let minT = 0;
+  let maxT = 0;
+  if (timestamps.length > 0) {
+    minT = timestamps[0];
+    maxT = timestamps[0];
+    for (let i = 1; i < timestamps.length; i++) {
+      if (timestamps[i] < minT) minT = timestamps[i];
+      if (timestamps[i] > maxT) maxT = timestamps[i];
+    }
+  }
+
   const errorCount = events.filter((e) => e.level === 'ERROR' || e.level === 'FATAL').length;
 
   return (

@@ -13,8 +13,14 @@ export default function TimelineBar({ events, logs, onClickTimestamp }: Props) {
   const { minT, span } = useMemo(() => {
     const timestamps = events.map((e) => e.absoluteTimestamp).filter((t) => t > 0);
     if (timestamps.length === 0) return { minT: 0, maxT: 0, span: 1 };
-    const min = Math.min(...timestamps);
-    const max = Math.max(...timestamps);
+    
+    let min = timestamps[0];
+    let max = timestamps[0];
+    for (let i = 1; i < timestamps.length; i++) {
+      if (timestamps[i] < min) min = timestamps[i];
+      if (timestamps[i] > max) max = timestamps[i];
+    }
+    
     return { minT: min, maxT: max, span: max - min || 1 };
   }, [events]);
 
@@ -82,8 +88,14 @@ export default function TimelineBar({ events, logs, onClickTimestamp }: Props) {
           const logEvents = events.filter((e) => e.sourceLogId === log.id);
           if (logEvents.length === 0) return null;
           const ts = logEvents.map((e) => e.absoluteTimestamp);
-          const lo = Math.min(...ts);
-          const hi = Math.max(...ts);
+          
+          let lo = ts[0];
+          let hi = ts[0];
+          for (let i = 1; i < ts.length; i++) {
+            if (ts[i] < lo) lo = ts[i];
+            if (ts[i] > hi) hi = ts[i];
+          }
+          
           const left = ((lo - minT) / span) * 100;
           const width = Math.max(((hi - lo) / span) * 100, 0.5);
           return (
