@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import type { SfConnection, SfOrg } from '../types';
+import type { SfConnection, SfOrgGroup } from '../types';
 import { connectToSalesforce, listOrgs } from '../api';
 
 interface Props {
@@ -7,11 +7,13 @@ interface Props {
 }
 
 export default function ConnectPanel({ onConnected }: Props) {
-  const [orgs, setOrgs] = useState<SfOrg[]>([]);
+  const [orgGroups, setOrgGroups] = useState<SfOrgGroup[]>([]);
   const [loadingOrgs, setLoadingOrgs] = useState(true);
   const [selectedOrg, setSelectedOrg] = useState('');
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState('');
+
+  const allOrgs = orgGroups.flatMap((g) => g.orgs);
 
   useEffect(() => {
     loadOrgs();
@@ -21,14 +23,15 @@ export default function ConnectPanel({ onConnected }: Props) {
     setLoadingOrgs(true);
     setError('');
     try {
-      const result = await listOrgs();
-      setOrgs(result);
+      const groups = await listOrgs();
+      setOrgGroups(groups);
       // Auto-select the default org
-      const defaultOrg = result.find((o) => o.isDefaultUsername);
+      const flat = groups.flatMap((g) => g.orgs);
+      const defaultOrg = flat.find((o) => o.isDefaultUsername);
       if (defaultOrg) {
-        setSelectedOrg(defaultOrg.alias || defaultOrg.username);
-      } else if (result.length > 0) {
-        setSelectedOrg(result[0].alias || result[0].username);
+        setSelectedOrg(defaultOrg.username);
+      } else if (flat.length > 0) {
+        setSelectedOrg(flat[0].username);
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to list orgs');
@@ -72,7 +75,7 @@ export default function ConnectPanel({ onConnected }: Props) {
               <div className="w-full px-3 py-2 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-[var(--text-dim)] text-sm">
                 Loading orgs from sf CLI...
               </div>
-            ) : orgs.length === 0 ? (
+            ) : allOrgs.length === 0 ? (
               <div className="w-full px-3 py-2 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-[var(--text-dim)] text-sm">
                 No orgs found. Run{' '}
                 <code className="text-[var(--accent)]">sf org login web</code> to authenticate.
@@ -83,15 +86,19 @@ export default function ConnectPanel({ onConnected }: Props) {
                 onChange={(e) => setSelectedOrg(e.target.value)}
                 className="w-full px-3 py-2 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-[var(--text)] text-sm outline-none focus:border-[var(--accent)] transition-colors"
               >
-                {orgs.map((org) => {
-                  const label = org.alias || org.username;
-                  const detail = org.alias ? ` (${org.username})` : '';
-                  return (
-                    <option key={org.username} value={org.alias || org.username}>
-                      {label}{detail}{org.isDefaultUsername ? ' ★' : ''}
-                    </option>
-                  );
-                })}
+                {orgGroups.map((group) => (
+                  <optgroup key={group.label} label={group.label}>
+                    {group.orgs.map((org) => {
+                      const label = org.alias || org.username;
+                      const detail = org.alias ? ` (${org.username})` : '';
+                      return (
+                        <option key={org.username} value={org.username}>
+                          {label}{detail}{org.isDefaultUsername ? ' ★' : ''}
+                        </option>
+                      );
+                    })}
+                  </optgroup>
+                ))}
               </select>
             )}
           </div>

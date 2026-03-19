@@ -39,19 +39,35 @@ app.get('/api/orgs', async (_req, res) => {
     const result = await sfCommand(['org', 'list']);
     // result.result has { nonScratchOrgs, scratchOrgs, sandboxes, other }
     const data = result.result || {};
-    const orgs = [
-      ...(data.nonScratchOrgs || []),
-      ...(data.scratchOrgs || []),
-      ...(data.sandboxes || []),
-      ...(data.other || []),
-    ].map((o) => ({
-      alias: o.alias || '',
-      username: o.username || '',
-      instanceUrl: o.instanceUrl || '',
-      isDefaultUsername: o.isDefaultUsername || false,
-      connectedStatus: o.connectedStatus || '',
-    }));
-    res.json({ orgs });
+    const categories = [
+      { key: 'sandboxes', label: 'Sandboxes' },
+      { key: 'scratchOrgs', label: 'Scratch Orgs' },
+      { key: 'devHubs', label: 'Dev Hubs' },
+      { key: 'nonScratchOrgs', label: 'Production / Developer' },
+      { key: 'other', label: 'Other' },
+    ];
+    // Assign each org to its first matching category and deduplicate
+    const seen = new Set();
+    const groups = [];
+    for (const { key, label } of categories) {
+      const catOrgs = [];
+      for (const o of (data[key] || [])) {
+        const username = o.username || '';
+        if (!username || seen.has(username)) continue;
+        seen.add(username);
+        catOrgs.push({
+          alias: o.alias || '',
+          username,
+          instanceUrl: o.instanceUrl || '',
+          isDefaultUsername: o.isDefaultUsername || false,
+          connectedStatus: o.connectedStatus || '',
+        });
+      }
+      if (catOrgs.length > 0) {
+        groups.push({ label, orgs: catOrgs });
+      }
+    }
+    res.json({ groups });
   } catch (err) {
     res.status(500).json({ error: 'Failed to list orgs. Is the sf CLI installed?', detail: err.message });
   }

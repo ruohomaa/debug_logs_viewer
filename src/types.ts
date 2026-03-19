@@ -70,6 +70,11 @@ export interface SfOrg {
   connectedStatus: string;
 }
 
+export interface SfOrgGroup {
+  label: string;
+  orgs: SfOrg[];
+}
+
 // ── Connection state ──
 export interface SfConnection {
   connId: string;
