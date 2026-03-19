@@ -102,27 +102,38 @@ app.post('/api/connect', async (req, res) => {
   }
 });
 
-// ── Query ApexLog records ──
+// ── Query ApexLog records (fetches ALL via pagination) ──
 app.get('/api/logs', async (req, res) => {
-  const { connId, limit = '100' } = req.query;
+  const { connId } = req.query;
   const session = sessions.get(connId);
   if (!session) return res.status(401).json({ error: 'Not connected' });
 
-  const query = `SELECT Id, LogUser.Name, LogLength, Operation, Application, Status, DurationMilliseconds, StartTime, RequestIdentifier, Location, SystemModstamp FROM ApexLog ORDER BY StartTime DESC LIMIT ${parseInt(limit, 10)}`;
+  const query = `SELECT Id, LogUser.Name, LogLength, Operation, Application, Status, DurationMilliseconds, StartTime, RequestIdentifier, Location, SystemModstamp FROM ApexLog ORDER BY StartTime DESC`;
 
   try {
-    const response = await fetch(
-      `${session.instanceUrl}/services/data/v62.0/query?q=${encodeURIComponent(query)}`,
-      { headers: { 'Authorization': `Bearer ${session.sessionId}` } }
-    );
+    let allRecords = [];
+    let url = `${session.instanceUrl}/services/data/v62.0/query?q=${encodeURIComponent(query)}`;
 
-    if (!response.ok) {
-      const errText = await response.text();
-      return res.status(response.status).json({ error: 'Query failed', detail: errText });
+    while (url) {
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${session.sessionId}` },
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        return res.status(response.status).json({ error: 'Query failed', detail: errText });
+      }
+
+      const data = await response.json();
+      allRecords = allRecords.concat(data.records || []);
+
+      // Follow nextRecordsUrl for pagination
+      url = data.nextRecordsUrl
+        ? `${session.instanceUrl}${data.nextRecordsUrl}`
+        : null;
     }
 
-    const data = await response.json();
-    res.json(data);
+    res.json({ totalSize: allRecords.length, done: true, records: allRecords });
   } catch (err) {
     res.status(500).json({ error: 'Failed to query logs', detail: err.message });
   }

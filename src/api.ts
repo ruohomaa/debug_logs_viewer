@@ -28,10 +28,9 @@ export async function connectToSalesforce(
 }
 
 export async function fetchApexLogs(
-  connId: string,
-  limit = 200
+  connId: string
 ): Promise<ApexLogRecord[]> {
-  const res = await fetch(`${BASE}/logs?connId=${connId}&limit=${limit}`);
+  const res = await fetch(`${BASE}/logs?connId=${connId}`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: 'Query failed' }));
     throw new Error(err.error || 'Failed to fetch logs');

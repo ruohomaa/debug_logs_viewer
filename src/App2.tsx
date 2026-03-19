@@ -105,7 +105,7 @@ export default function App() {
     setConnection(conn);
     setLoadingLogs(true);
     try {
-      const logs = await fetchApexLogs(conn.connId, 200);
+      const logs = await fetchApexLogs(conn.connId);
       setApexLogs(logs);
     } catch (e) {
       console.error('Failed to fetch logs:', e);
@@ -118,7 +118,7 @@ export default function App() {
     if (!connection) return;
     setLoadingLogs(true);
     try {
-      const logs = await fetchApexLogs(connection.connId, 200);
+      const logs = await fetchApexLogs(connection.connId);
       setApexLogs(logs);
     } catch (e) {
       console.error('Failed to refresh logs:', e);
