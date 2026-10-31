@@ -93,7 +93,10 @@ app.post('/api/connect', async (req, res) => {
 
     const orgInfo = result.result || {};
     const instanceUrl = orgInfo.instanceUrl;
-    const accessToken = orgInfo.accessToken;
+
+    // sf CLI 2.141+ redacts accessToken in `org display`; fetch it separately.
+    const tokenResult = await sfCommand(['org', 'auth', 'show-access-token', '--target-org', targetOrg]);
+    const accessToken = tokenResult.status === 0 ? tokenResult.result?.accessToken : undefined;
 
     if (!instanceUrl || !accessToken) {
       return res.status(401).json({ error: 'Could not retrieve access token. Try running: sf org login web --alias ' + targetOrg });

@@ -17,7 +17,7 @@ A modern, interactive tool for visualizing and analyzing Salesforce Apex debug l
 ### Visualization Modes
 - **Timeline View**: Visual representation of execution time and event duration.
 - **Sequence Diagram**: Generates a UML sequence diagram to visualize call stacks and interactions.
-- **Tree View**: Hierarchical collapse/expand view of the execution stack.
+- **Tree View**: Hierarchical collapse/expand view of the execution stack, with self/total durations per frame.
 - **Event List**: Detailed chronological list of log events.
 
 ### Analysis Tools
@@ -25,6 +25,12 @@ A modern, interactive tool for visualizing and analyzing Salesforce Apex debug l
 - **Search**: Full-text search within log events for specific variable names or error messages.
 - **Detail Panel**: Inspect deep properties of selected events.
 - **Performance Stats**: View total duration, event counts, and other metrics.
+
+## Log Parsing
+
+The event list, timeline, filters and sequence diagram use the app's own line parser ([src/logParser.ts](src/logParser.ts)).
+
+The **Tree View** is built with [`@apexdevtools/apex-log-parser`](https://www.npmjs.com/package/@apexdevtools/apex-log-parser) (BSD-3-Clause), the parser behind Certinia's [Apex Log Analyzer](https://github.com/certinia/debug-log-analyzer). It parses each log in the browser and provides the call nesting and nanosecond durations; [src/apexLogTree.ts](src/apexLogTree.ts) maps its events onto the app's events. The package is pre-1.0, so its version is pinned in `package.json`.
 
 ## Prerequisites
 
@@ -82,4 +88,4 @@ This will launch:
 ## Troubleshooting
 
 -   **Failed to list orgs**: Ensure `sf` is in your system PATH and you can run `sf org list` in your terminal.
--   **Connection Failed**: The local server uses the `sf` CLI to obtain an access token. Ensure your session is valid by running `sf org display -o <alias>` in your terminal.
+-   **Connection Failed**: The local server uses the `sf` CLI to obtain an access token. Ensure your session is valid by running `sf org auth show-access-token -o <alias>` in your terminal. (Salesforce CLI 2.141+ no longer returns the token from `sf org display`.)

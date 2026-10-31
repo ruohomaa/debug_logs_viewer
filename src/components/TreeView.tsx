@@ -1,9 +1,10 @@
-import { useState, useMemo, useCallback } from 'react';
-import type { LogEvent } from '../types';
+import { useState, useMemo, useCallback, useEffect } from 'react';
+import { parse, type ApexLog } from '@apexdevtools/apex-log-parser';
+import type { LoadedLog, LogEvent } from '../types';
+import { buildApexLogTree } from '../apexLogTree';
 import { formatDuration } from '../logParser';
 import { getLevelColor } from '../constants';
 import {
-  buildLogTree,
   setAllExpanded,
   filterTree,
   getEventIcon,
@@ -12,6 +13,7 @@ import {
 
 interface Props {
   events: LogEvent[];
+  logs: LoadedLog[];
   density: 'default' | 'compact' | 'comfortable';
   onSelectEvent: (event: LogEvent) => void;
   connId?: string;
@@ -52,12 +54,47 @@ function linkifyText(text: string, connId?: string) {
   return parts.length > 0 ? parts : text;
 }
 
-export default function TreeView({ events, density, onSelectEvent, connId }: Props) {
+export default function TreeView({ events, logs, density, onSelectEvent, connId }: Props) {
   const [treeFilter, setTreeFilter] = useState('');
   const [expandAll, setExpandAll] = useState<boolean | null>(null);
+  const [parsed, setParsed] = useState<Map<string, ApexLog>>(new Map());
+  const [parseError, setParseError] = useState<string | null>(null);
 
-  // Build tree from flat events
-  const rawTree = useMemo(() => buildLogTree(events), [events]);
+  const neededLogs = useMemo(() => {
+    const ids = new Set(events.map((e) => e.sourceLogId));
+    return logs.filter((l) => ids.has(l.id));
+  }, [events, logs]);
+
+  const pendingLogs = useMemo(
+    () => neededLogs.filter((l) => !parsed.has(l.id)),
+    [neededLogs, parsed]
+  );
+
+  useEffect(() => {
+    if (pendingLogs.length === 0) return;
+    const controller = new AbortController();
+    Promise.all(
+      pendingLogs.map(async (l) => [l.id, await parse(l.rawContent, { signal: controller.signal })] as const)
+    )
+      .then((results) => {
+        const liveIds = new Set(logs.map((l) => l.id));
+        setParsed((prev) => {
+          const next = new Map([...prev].filter(([id]) => liveIds.has(id)));
+          for (const [id, log] of results) next.set(id, log);
+          return next;
+        });
+        setParseError(null);
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return;
+        setParseError(err instanceof Error ? err.message : String(err));
+      });
+    return () => controller.abort();
+  }, [pendingLogs, logs]);
+
+  const isParsing = pendingLogs.length > 0 && !parseError;
+
+  const rawTree = useMemo(() => buildApexLogTree(events, parsed), [events, parsed]);
 
   // Apply expand/collapse all
   const tree = useMemo(() => {
@@ -115,6 +152,12 @@ export default function TreeView({ events, density, onSelectEvent, connId }: Pro
         >
           Collapse All
         </button>
+        {isParsing && <span className="text-[11px] text-[var(--text-dim)]">Parsing…</span>}
+        {parseError && (
+          <span className="text-[11px] text-[#ff6b6b] truncate" title={parseError}>
+            Parse failed: {parseError}
+          </span>
+        )}
         <span className="text-[11px] text-[var(--text-dim)] ml-auto">
           {tree.length} root nodes
         </span>
