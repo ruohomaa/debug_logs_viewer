@@ -69,7 +69,7 @@ const FLOW_LIMIT_EVENT_TYPES = new Set([
  * Pre-process events to group consecutive flow limit usage
  * events of the same type into a single synthetic event.
  */
-function groupFlowInterviewLimits(events: LogEvent[]): LogEvent[] {
+export function groupFlowInterviewLimits(events: LogEvent[]): LogEvent[] {
   const result: LogEvent[] = [];
   let cursor = 0;
   while (cursor < events.length) {
@@ -167,7 +167,7 @@ export function buildLogTree(events: LogEvent[]): TreeNode[] {
 }
 
 /** Determine if a node should be auto-expanded */
-function isImportantEvent(eventType: string): boolean {
+export function isImportantEvent(eventType: string): boolean {
   return (
     eventType === 'EXECUTION_STARTED' ||
     eventType === 'CODE_UNIT_STARTED'

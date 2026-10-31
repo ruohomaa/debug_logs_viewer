@@ -648,6 +648,7 @@ export default function App() {
               {viewMode === 'tree' && (
                 <TreeView
                   events={filteredEvents}
+                  logs={loadedLogs}
                   density={density}
                   onSelectEvent={setSelectedEvent}
                   connId={connection?.connId}

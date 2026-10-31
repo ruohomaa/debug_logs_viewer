@@ -1,5 +1,7 @@
-import { useState, useMemo, useCallback } from 'react';
-import type { LogEvent } from '../types';
+import { useState, useMemo, useCallback, useEffect } from 'react';
+import { parse, type ApexLog } from '@apexdevtools/apex-log-parser';
+import type { LoadedLog, LogEvent } from '../types';
+import { buildApexLogTree } from '../apexLogTree';
 import { formatDuration } from '../logParser';
 import { getLevelColor } from '../constants';
 import {
@@ -10,8 +12,11 @@ import {
   type TreeNode,
 } from '../logTree';
 
+type TreeParser = 'builtin' | 'apex-log-parser';
+
 interface Props {
   events: LogEvent[];
+  logs: LoadedLog[];
   density: 'default' | 'compact' | 'comfortable';
   onSelectEvent: (event: LogEvent) => void;
   connId?: string;
@@ -52,12 +57,52 @@ function linkifyText(text: string, connId?: string) {
   return parts.length > 0 ? parts : text;
 }
 
-export default function TreeView({ events, density, onSelectEvent, connId }: Props) {
+export default function TreeView({ events, logs, density, onSelectEvent, connId }: Props) {
   const [treeFilter, setTreeFilter] = useState('');
   const [expandAll, setExpandAll] = useState<boolean | null>(null);
+  const [parser, setParser] = useState<TreeParser>('builtin');
+  const [parsed, setParsed] = useState<Map<string, ApexLog>>(new Map());
+  const [parseError, setParseError] = useState<string | null>(null);
+
+  const neededLogs = useMemo(() => {
+    const ids = new Set(events.map((e) => e.sourceLogId));
+    return logs.filter((l) => ids.has(l.id));
+  }, [events, logs]);
+
+  const pendingLogs = useMemo(
+    () => (parser === 'apex-log-parser' ? neededLogs.filter((l) => !parsed.has(l.id)) : []),
+    [parser, neededLogs, parsed]
+  );
+
+  useEffect(() => {
+    if (pendingLogs.length === 0) return;
+    const controller = new AbortController();
+    Promise.all(
+      pendingLogs.map(async (l) => [l.id, await parse(l.rawContent, { signal: controller.signal })] as const)
+    )
+      .then((results) => {
+        const liveIds = new Set(logs.map((l) => l.id));
+        setParsed((prev) => {
+          const next = new Map([...prev].filter(([id]) => liveIds.has(id)));
+          for (const [id, log] of results) next.set(id, log);
+          return next;
+        });
+        setParseError(null);
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return;
+        setParseError(err instanceof Error ? err.message : String(err));
+      });
+    return () => controller.abort();
+  }, [pendingLogs, logs]);
+
+  const isParsing = pendingLogs.length > 0 && !parseError;
 
   // Build tree from flat events
-  const rawTree = useMemo(() => buildLogTree(events), [events]);
+  const rawTree = useMemo(
+    () => (parser === 'builtin' ? buildLogTree(events) : buildApexLogTree(events, parsed)),
+    [parser, events, parsed]
+  );
 
   // Apply expand/collapse all
   const tree = useMemo(() => {
@@ -115,6 +160,24 @@ export default function TreeView({ events, density, onSelectEvent, connId }: Pro
         >
           Collapse All
         </button>
+        <select
+          value={parser}
+          onChange={(e) => {
+            setParser(e.target.value as TreeParser);
+            setParseError(null);
+          }}
+          className="px-2 py-1 text-[11px] bg-[var(--surface2)] text-[var(--text-dim)] border border-[var(--border)] rounded cursor-pointer outline-none"
+          title="Tree builder"
+        >
+          <option value="builtin">Built-in tree</option>
+          <option value="apex-log-parser">apex-log-parser</option>
+        </select>
+        {isParsing && <span className="text-[11px] text-[var(--text-dim)]">Parsing…</span>}
+        {parseError && (
+          <span className="text-[11px] text-[#ff6b6b] truncate" title={parseError}>
+            Parse failed: {parseError}
+          </span>
+        )}
         <span className="text-[11px] text-[var(--text-dim)] ml-auto">
           {tree.length} root nodes
         </span>
@@ -124,7 +187,7 @@ export default function TreeView({ events, density, onSelectEvent, connId }: Pro
       <div className="flex-1 overflow-auto px-2 py-1">
         {tree.map((node, i) => (
           <TreeNodeRow
-            key={`${node.event.sourceLogId}-${node.event.lineNum}-${i}`}
+            key={`${parser}-${node.event.sourceLogId}-${node.event.lineNum}-${i}`}
             node={node}
             depth={0}
             paddingY={paddingY}
