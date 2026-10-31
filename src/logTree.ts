@@ -1,64 +1,14 @@
 import type { LogEvent } from './types';
 
-/**
- * A node in the debug log tree.
- * BEGIN/STARTED events become parent nodes whose children are everything
- * until the matching END/FINISHED event.
- */
+/** A node in the debug log tree; frames hold the events up to their exit line. */
 export interface TreeNode {
   event: LogEvent;
   children: TreeNode[];
   expanded: boolean;
-  /** Duration in ms between BEGIN→END (only set on BEGIN nodes) */
+  /** Total frame duration in ms (only set on frame nodes) */
   durationMs?: number;
 }
 
-// ── Mapping from BEGIN → END event types ──
-const BEGIN_END_PAIRS: Record<string, string> = {
-  EXECUTION_STARTED: 'EXECUTION_FINISHED',
-  CODE_UNIT_STARTED: 'CODE_UNIT_FINISHED',
-  SOQL_EXECUTE_BEGIN: 'SOQL_EXECUTE_END',
-  DML_BEGIN: 'DML_END',
-  METHOD_ENTRY: 'METHOD_EXIT',
-  CONSTRUCTOR_ENTRY: 'CONSTRUCTOR_EXIT',
-  SYSTEM_METHOD_ENTRY: 'SYSTEM_METHOD_EXIT',
-  SYSTEM_CONSTRUCTOR_ENTRY: 'SYSTEM_CONSTRUCTOR_EXIT',
-  WF_RULE_EVAL_BEGIN: 'WF_RULE_EVAL_END',
-  WF_CRITERIA_BEGIN: 'WF_CRITERIA_END',
-  WF_SPOOL_ACTION_BEGIN: 'WF_SPOOL_ACTION_END',
-  WF_ACTIONS_BEGIN: 'WF_ACTIONS_END',
-  FLOW_CREATE_INTERVIEW_BEGIN: 'FLOW_CREATE_INTERVIEW_END',
-  FLOW_START_INTERVIEWS_BEGIN: 'FLOW_START_INTERVIEWS_END',
-  FLOW_START_INTERVIEW_BEGIN: 'FLOW_START_INTERVIEW_END',
-  FLOW_BULK_ELEMENT_BEGIN: 'FLOW_BULK_ELEMENT_END',
-  FLOW_ELEMENT_BEGIN: 'FLOW_ELEMENT_END',
-  VALIDATION_RULE: 'VALIDATION_PASS',
-  VF_SERIALIZE_VIEWSTATE_BEGIN: 'VF_SERIALIZE_VIEWSTATE_END',
-  VF_EVALUATE_FORMULA_BEGIN: 'VF_EVALUATE_FORMULA_END',
-  ENTERING_MANAGED_PKG: 'CUMULATIVE_LIMIT_USAGE',
-  HEAP_ALLOCATE: '',
-  CALLOUT_REQUEST: 'CALLOUT_RESPONSE',
-  PUSH_TRACE_FLAGS: 'POP_TRACE_FLAGS',
-};
-
-// Build the reverse map: END → BEGIN
-const END_EVENTS = new Set<string>();
-for (const end of Object.values(BEGIN_END_PAIRS)) {
-  if (end) END_EVENTS.add(end);
-}
-
-// Events that open a scope
-const BEGIN_EVENTS = new Set<string>(Object.keys(BEGIN_END_PAIRS));
-// Remove ones with empty END — they don't open a scope
-BEGIN_EVENTS.delete('HEAP_ALLOCATE');
-
-/**
- * Build a tree from a flat list of log events.
- *
- * Uses a stack: when a BEGIN event is encountered, push onto the stack;
- * subsequent events become children. When a matching END event appears,
- * pop the stack.
- */
 const FLOW_LIMIT_EVENT_TYPES = new Set([
   'FLOW_START_INTERVIEW_LIMIT_USAGE',
   'FLOW_INTERVIEW_FINISHED_LIMIT_USAGE',
@@ -95,75 +45,6 @@ export function groupFlowInterviewLimits(events: LogEvent[]): LogEvent[] {
     });
   }
   return result;
-}
-
-export function buildLogTree(events: LogEvent[]): TreeNode[] {
-  const grouped = groupFlowInterviewLimits(events);
-  const roots: TreeNode[] = [];
-  const stack: TreeNode[] = [];
-
-  const currentChildren = () =>
-    stack.length > 0 ? stack.at(-1)!.children : roots;
-
-  for (const event of grouped) {
-    const { eventType } = event;
-
-    // Is this an END event?  Pop the stack up to its matching BEGIN.
-    if (END_EVENTS.has(eventType)) {
-      // Find matching BEGIN on the stack
-      let found = false;
-      for (let i = stack.length - 1; i >= 0; i--) {
-        const beginType = stack[i].event.eventType;
-        if (BEGIN_END_PAIRS[beginType] === eventType) {
-          // Compute duration
-          const durationMs = event.absoluteTimestamp - stack[i].event.absoluteTimestamp;
-          stack[i].durationMs = durationMs >= 0 ? durationMs : undefined;
-
-          // Add the END event as the last child so it's visible in the tree
-          stack[i].children.push({
-            event,
-            children: [],
-            expanded: false,
-          });
-
-          // Pop back to that level
-          stack.splice(i);
-          found = true;
-          break;
-        }
-      }
-      if (!found) {
-        // Orphan END event — just add as-is
-        currentChildren().push({
-          event,
-          children: [],
-          expanded: false,
-        });
-      }
-      continue;
-    }
-
-    // Is this a BEGIN event? Create a node and push onto the stack.
-    if (BEGIN_EVENTS.has(eventType) && BEGIN_END_PAIRS[eventType]) {
-      const node: TreeNode = {
-        event,
-        children: [],
-        expanded: isImportantEvent(eventType), // auto-expand important events
-      };
-      currentChildren().push(node);
-      stack.push(node);
-      continue;
-    }
-
-    // Regular event — add as a leaf child
-    currentChildren().push({
-      event,
-      children: [],
-      expanded: false,
-    });
-  }
-
-  return roots;
 }
 
 /** Determine if a node should be auto-expanded */

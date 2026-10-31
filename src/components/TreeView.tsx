@@ -5,14 +5,11 @@ import { buildApexLogTree } from '../apexLogTree';
 import { formatDuration } from '../logParser';
 import { getLevelColor } from '../constants';
 import {
-  buildLogTree,
   setAllExpanded,
   filterTree,
   getEventIcon,
   type TreeNode,
 } from '../logTree';
-
-type TreeParser = 'builtin' | 'apex-log-parser';
 
 interface Props {
   events: LogEvent[];
@@ -60,7 +57,6 @@ function linkifyText(text: string, connId?: string) {
 export default function TreeView({ events, logs, density, onSelectEvent, connId }: Props) {
   const [treeFilter, setTreeFilter] = useState('');
   const [expandAll, setExpandAll] = useState<boolean | null>(null);
-  const [parser, setParser] = useState<TreeParser>('builtin');
   const [parsed, setParsed] = useState<Map<string, ApexLog>>(new Map());
   const [parseError, setParseError] = useState<string | null>(null);
 
@@ -70,8 +66,8 @@ export default function TreeView({ events, logs, density, onSelectEvent, connId 
   }, [events, logs]);
 
   const pendingLogs = useMemo(
-    () => (parser === 'apex-log-parser' ? neededLogs.filter((l) => !parsed.has(l.id)) : []),
-    [parser, neededLogs, parsed]
+    () => neededLogs.filter((l) => !parsed.has(l.id)),
+    [neededLogs, parsed]
   );
 
   useEffect(() => {
@@ -98,11 +94,7 @@ export default function TreeView({ events, logs, density, onSelectEvent, connId 
 
   const isParsing = pendingLogs.length > 0 && !parseError;
 
-  // Build tree from flat events
-  const rawTree = useMemo(
-    () => (parser === 'builtin' ? buildLogTree(events) : buildApexLogTree(events, parsed)),
-    [parser, events, parsed]
-  );
+  const rawTree = useMemo(() => buildApexLogTree(events, parsed), [events, parsed]);
 
   // Apply expand/collapse all
   const tree = useMemo(() => {
@@ -160,18 +152,6 @@ export default function TreeView({ events, logs, density, onSelectEvent, connId 
         >
           Collapse All
         </button>
-        <select
-          value={parser}
-          onChange={(e) => {
-            setParser(e.target.value as TreeParser);
-            setParseError(null);
-          }}
-          className="px-2 py-1 text-[11px] bg-[var(--surface2)] text-[var(--text-dim)] border border-[var(--border)] rounded cursor-pointer outline-none"
-          title="Tree builder"
-        >
-          <option value="builtin">Built-in tree</option>
-          <option value="apex-log-parser">apex-log-parser</option>
-        </select>
         {isParsing && <span className="text-[11px] text-[var(--text-dim)]">Parsing…</span>}
         {parseError && (
           <span className="text-[11px] text-[#ff6b6b] truncate" title={parseError}>
@@ -187,7 +167,7 @@ export default function TreeView({ events, logs, density, onSelectEvent, connId 
       <div className="flex-1 overflow-auto px-2 py-1">
         {tree.map((node, i) => (
           <TreeNodeRow
-            key={`${parser}-${node.event.sourceLogId}-${node.event.lineNum}-${i}`}
+            key={`${node.event.sourceLogId}-${node.event.lineNum}-${i}`}
             node={node}
             depth={0}
             paddingY={paddingY}
